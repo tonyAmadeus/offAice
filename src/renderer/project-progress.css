@@ -1,0 +1,45 @@
+/* The board column: a switch between this flow's board and the whole project's progress. */
+.project-side { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.project-side-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.project-side > .board, .project-side > .project-progress { flex: 1; min-height: 0; }
+
+.project-progress { min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 78%, transparent); overflow-wrap: anywhere; }
+.progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.progress-head h2 { margin: 0; font-size: var(--fs-base); }
+.progress-counts { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-2); }
+.progress-counts .progress-total { margin: 0; font-size: var(--fs-md); font-weight: 700; color: var(--ink); }
+.progress-counts dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font-size: var(--fs-sm); line-height: 1.55; }
+.progress-counts dt { color: var(--ink-3); }
+.progress-counts dd { margin: 0; color: var(--ink-2); }
+.progress-counts small, .progress-scope { font-size: var(--fs-xs); line-height: 1.5; color: var(--ink-3); }
+
+.progress-flow { display: flex; flex-direction: column; gap: 3px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.progress-flow.status-active { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+.progress-flow.status-cancelled { background: transparent; }
+.progress-flow-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; text-align: left; color: var(--ink); }
+.progress-flow-title svg { flex-shrink: 0; color: var(--ink-3); }
+.progress-flow-title strong { flex: 1; min-width: 0; font-size: var(--fs-md); line-height: 1.4; }
+.progress-status { flex-shrink: 0; padding: 1px 7px; border-radius: 999px; background: var(--sunken); font-size: var(--fs-xs); color: var(--ink-3); }
+.status-active .progress-status { background: color-mix(in srgb, var(--brand) 12%, transparent); color: var(--ink); }
+.status-completed .progress-status { color: var(--ok); }
+.progress-flow-meta { margin: 0 0 0 20px; font-size: var(--fs-sm); line-height: 1.55; color: var(--ink-3); }
+.progress-flow-summary { margin: 2px 0 0 20px; font-size: var(--fs-sm); line-height: 1.6; color: var(--ink-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.progress-flow.open .progress-flow-summary { -webkit-line-clamp: unset; }
+.progress-who { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--ink-2); vertical-align: -3px; }
+.progress-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--fs-sm); color: var(--ink-3); }
+
+.progress-details { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 0; min-width: 0; }
+.progress-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); width: 100%; }
+.progress-tabs button { justify-content: center; padding: 4px 2px; font-size: var(--fs-xs); white-space: nowrap; }
+.progress-record-link { align-self: flex-start; font-size: var(--fs-sm); }
+.progress-scope { margin: 0; }
+.progress-detail-record { padding: 8px 10px; border-left: 2px solid var(--line-strong); border-radius: 0 8px 8px 0; background: var(--surface-2); font-size: var(--fs-sm); line-height: 1.6; }
+.progress-detail-record h3 { margin: 0 0 4px; font-size: var(--fs-md); }
+.progress-detail-record h4 { margin: 6px 0 2px; font-size: var(--fs-sm); color: var(--ink-2); }
+.progress-detail-record p { margin: 3px 0; }
+.progress-detail-record ul { margin: 3px 0; padding-left: 18px; }
+.progress-detail-record .link-button { font-size: var(--fs-sm); margin: 4px 10px 4px 0; }
+.progress-detail-record .markdown { font-size: var(--fs-sm); max-width: 100%; }
+.project-record-setting { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: var(--fs-sm); color: var(--ink-2); }
+
+@media (max-width: 860px) { .project-side { min-height: 460px; } }

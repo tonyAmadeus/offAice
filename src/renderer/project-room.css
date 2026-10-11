@@ -1,0 +1,383 @@
+/* Project meeting room: the conversation that follows the work on the left, the board on the right. */
+.project-room { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 20px 14px; overflow: hidden; background: radial-gradient(900px 300px at 50% -140px, var(--lamp-soft), transparent 70%), var(--bg); }
+.project-room-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.project-room-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: var(--r-md); background: var(--brand); color: var(--brand-ink); flex: none; }
+.project-room-title { flex: 1; min-width: 180px; }
+.project-room-title h1 { margin: 0; font-size: var(--fs-lg); display: flex; align-items: baseline; gap: 10px; }
+.project-room-title h1 small { font-size: var(--fs-sm); font-weight: 500; color: var(--ink-3); }
+.project-room-title p { margin: 1px 0 0; font-size: var(--fs-sm); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-room-numbers { display: flex; gap: 6px; }
+.project-room-numbers span { display: flex; align-items: baseline; gap: 5px; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); font-size: var(--fs-sm); color: var(--ink-3); }
+.project-room-numbers strong { font-size: var(--fs-lg); color: var(--ink); }
+.project-room-numbers .needs-user { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: var(--warn-soft); }
+.project-room-numbers .needs-user strong { color: var(--warn); }
+.project-room-controls { display: flex; align-items: center; gap: 6px; }
+.project-review-level { display:flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--ink-3); }
+.project-review-level select { max-width:185px;font-size:var(--fs-sm); }
+.project-stage { display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0;font-size:var(--fs-sm);color:var(--ink-3); }
+/* In the title line the stage stays on one line; the folder and full text are in the tooltip. */
+.project-room-title .project-stage { display:block; margin:1px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.project-room-title .project-stage .member-name { vertical-align: middle; }
+.plan-peer { display:flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--ink-3); }
+.decision-card label { display:flex;align-items:center;gap:8px;margin:8px 0; }
+.decision-card textarea { width:100%;box-sizing:border-box;resize:vertical;margin:8px 0; }
+
+/* The six steps of the flow, so the owner always sees where the work stands. */
+.flow-steps { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.flow-steps li { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--surface) 70%, transparent); border: 1px solid var(--line); font-size: var(--fs-sm); color: var(--ink-3); }
+.flow-steps li > span { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--sunken); font-size: var(--fs-xs); font-weight: 700; }
+.flow-steps li.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--line)); }
+.flow-steps li.done svg { width: 16px; }
+.flow-steps li.current { color: var(--ink); background: var(--surface); border-color: var(--brand); font-weight: 700; box-shadow: var(--shadow-sm); }
+.flow-steps li.current > span { background: var(--brand); color: var(--brand-ink); }
+.flow-steps li.paused, .flow-steps li.cancelled { margin-left: 6px; padding: 0 11px; background: var(--warn-soft); border-color: transparent; color: var(--warn); font-weight: 600; }
+/* Steps on the left, the members' report chips on the right of the same row. */
+.project-room-subbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.project-room-subbar .flow-steps { flex: 1 1 auto; min-width: 0; }
+.project-room-loading { display: flex; align-items: center; gap: 8px; padding: 28px; justify-content: center; color: var(--ink-3); font-size: var(--fs-md); }
+
+.project-room-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); gap: 14px; }
+/* The board folds into a narrow rail so the chat gets the width; the choice is remembered. */
+.project-room-grid.board-collapsed { grid-template-columns: minmax(0, 1fr) 40px; }
+.project-side-rail { min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 78%, transparent); }
+.project-side-rail-label { padding: 6px 0; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: var(--fs-sm); font-weight: 600; letter-spacing: .2em; writing-mode: vertical-rl; cursor: pointer; }
+.project-side-rail-label:hover { color: var(--ink); }
+.project-side-rail-count { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--warn); color: #fff; font-size: var(--fs-xs); font-weight: 700; line-height: 20px; text-align: center; }
+.project-side-tools { display: inline-flex; align-items: center; gap: 2px; }
+@media (max-width: 860px) { .project-room-grid.board-collapsed { grid-template-columns: 1fr; } .project-side-rail { flex-direction: row; justify-content: flex-start; padding: 4px 8px; } .project-side-rail-label { writing-mode: horizontal-tb; letter-spacing: normal; } }
+.meeting, .board { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 78%, transparent); }
+.meeting-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.meeting-note { display: flex; gap: 8px; align-self: center; max-width: 92%; padding: 8px 12px; border-radius: var(--r-md); background: var(--sunken); color: var(--ink-2); font-size: var(--fs-md); line-height: 1.6; }
+.meeting-note > svg { flex: none; margin-top: 3px; color: var(--ink-3); }
+.meeting-note .button { margin-left: 8px; vertical-align: middle; }
+.meeting-bubble { align-self: flex-end; display: flex; align-items: flex-start; gap: 8px; max-width: 80%; }
+.meeting-bubble-text { padding: 9px 13px; border-radius: var(--r-lg) 6px var(--r-lg) var(--r-lg); background: var(--brand); color: var(--brand-ink); font-size: var(--fs-base); white-space: pre-wrap; word-break: break-word; }
+.meeting-bubble .icon-button { opacity: 0; transition: opacity .15s; margin-top: 6px; }
+.meeting-bubble:hover .icon-button { opacity: 1; }
+.meeting-line { display: flex; align-items: flex-start; gap: 10px; max-width: 94%; }
+.meeting-line-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.meeting-line-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-sm); color: var(--ink-3); }
+.meeting-line-name strong { color: var(--m-ink, var(--ink)); font-size: var(--fs-md); }
+.meeting-typing { display: flex; align-items: center; gap: 6px; margin: 0; padding: 9px 13px; border-radius: 6px var(--r-lg) var(--r-lg) var(--r-lg); background: var(--surface); border: 1px solid var(--m-line, var(--line)); font-size: var(--fs-md); color: var(--ink-2); width: fit-content; }
+.meeting-card { padding: 12px 14px; border: 1px solid var(--m-line, var(--line)); border-radius: 6px var(--r-lg) var(--r-lg) var(--r-lg); background: var(--surface); box-shadow: var(--shadow-sm); font-size: var(--fs-md); }
+.meeting-card.waiting, .meeting-card.awaiting { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 10%, transparent); }
+.meeting-card h4 { margin: 10px 0 4px; font-size: var(--fs-sm); color: var(--ink-3); font-weight: 600; }
+.meeting-card ul { margin: 0; padding-left: 18px; }
+.meeting-card p { margin: 0; }
+.meeting-alert { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--line)); border-radius: var(--r-md); background: var(--bad-soft); font-size: var(--fs-md); }
+.meeting-alert > svg { color: var(--bad); flex: none; margin-top: 2px; }
+.meeting-alert p { margin: 4px 0 0; }
+.meeting-alert small { display: block; margin-top: 6px; color: var(--ink-3); }
+.meeting-composer { padding: 10px 14px 12px; border-top: 1px solid var(--line); }
+.meeting-composer-note { display: flex; gap: 10px; margin-bottom: 6px; font-size: var(--fs-sm); color: var(--warn); }
+.meeting-input { display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 12px; }
+.meeting-input textarea { flex: 1; height: 56px; min-height: 0; resize: none; border: 0; background: transparent; font: inherit; font-size: var(--fs-base); color: var(--ink); outline: none; }
+.meeting-composer.mode-idle .meeting-input { opacity: .65; }
+.meeting-composer.mode-reject .meeting-input { border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+
+/* Choosing the lead: the members as faces, the lead marked. */
+.lead-picker { align-self: stretch; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px dashed var(--line-strong); border-radius: var(--r-lg); background: var(--surface); }
+.lead-picker > small { color: var(--ink-3); font-size: var(--fs-sm); }
+.lead-picker-members { display: flex; flex-wrap: wrap; gap: 14px; margin: 4px 0; }
+.lead-option { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: var(--fs-md); }
+.lead-option-face { position: relative; padding: 3px; border: 2px solid transparent; border-radius: 50%; background: none; cursor: pointer; }
+.lead-option-face:disabled { cursor: default; }
+.lead-option.lead .lead-option-face { border-color: var(--m, var(--brand)); }
+.lead-option:not(.on) .avatar { filter: grayscale(.8); opacity: .5; }
+.lead-option.unready { opacity: .5; }
+.lead-badge { position: absolute; left: 50%; bottom: -6px; translate: -50% 0; padding: 0 6px; border-radius: 999px; background: var(--m, var(--brand)); color: #fff; font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; }
+.lead-option label { display: inline-flex; align-items: center; gap: 4px; }
+.lead-picker > .button { align-self: flex-start; }
+
+/* Plan and round cards inside the conversation. */
+.plan-status, .round-chip, .task-chip { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 600; background: var(--sunken); color: var(--ink-2); white-space: nowrap; }
+.plan-status.status-awaiting_confirmation, .round-chip.status-awaiting_acceptance { background: var(--warn-soft); color: var(--warn); }
+.plan-status.status-confirmed, .round-chip.status-accepted { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); color: var(--ok); }
+.round-chip.status-executing, .round-chip.status-integrating, .round-chip.status-checking { background: var(--ok-soft); color: var(--ok); }
+.round-chip.status-blocked, .round-chip.status-changes_requested { background: var(--bad-soft); color: var(--bad); }
+.plan-card-title { display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; border: 0; background: none; font: inherit; font-size: var(--fs-base); text-align: left; color: var(--ink); cursor: pointer; }
+.plan-scope { margin-top: 6px !important; color: var(--ink-2); }
+.plan-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.plan-rounds { margin: 12px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.plan-rounds > li { padding: 9px 11px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); }
+.plan-round-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan-rounds > li > p { margin: 3px 0 5px; font-size: var(--fs-md); color: var(--ink-2); }
+.plan-accept { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-md); }
+.plan-accept-note { margin-left: auto; color: var(--ink-3); font-size: var(--fs-sm); }
+.plan-tasks { list-style: none; padding: 0 !important; display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-md); }
+.plan-tasks li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.plan-tasks small { color: var(--ink-3); }
+.flow-member { display: inline-flex; align-items: center; gap: 4px; color: var(--m-ink, var(--ink-2)); font-weight: 600; margin-right: 4px; }
+.round-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.round-actions small { color: var(--ink-3); font-size: var(--fs-sm); }
+.round-actions select { font: inherit; font-size: var(--fs-sm); height: 30px; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+.round-card-title { display: flex; align-items: baseline; gap: 10px; font-size: var(--fs-base); }
+.round-card-title small { font-weight: 500; font-size: var(--fs-sm); color: var(--ink-3); }
+.round-report-summary { margin-top: 6px !important; font-size: var(--fs-base); line-height: 1.6; }
+.round-report p { color: var(--ink-2); }
+.round-report .round-report-ask { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 8px 10px; border-radius: var(--r-md); background: var(--warn-soft); color: var(--ink); }
+.round-conflicts { margin-top: 10px; padding: 10px 12px; border-radius: var(--r-md); background: var(--warn-soft); font-size: var(--fs-md); }
+.round-conflicts.bad { background: var(--bad-soft); }
+.round-conflicts ul { margin: 6px 0; }
+.round-files { margin-top: 10px; }
+.round-apply { display: flex; align-items: center; gap: 6px; margin-top: 10px !important; color: var(--ink-2); }
+.round-diff ul { margin: 6px 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
+.round-diff li.change-added { color: var(--ok); }
+.round-diff li.change-deleted { color: var(--bad); }
+.round-diff pre { max-height: 300px; overflow: auto; margin: 0; padding: 10px; border-radius: var(--r-md); background: var(--sunken); font-family: var(--mono); font-size: var(--fs-sm); white-space: pre; }
+.round-actions.verdict .button { min-width: 92px; justify-content: center; }
+.decision-card { align-self: stretch; border-radius: var(--r-lg); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn-soft) 55%, var(--surface)); }
+.decision-card-head { display: flex; align-items: center; gap: 8px; }
+.decision-card-head svg { color: var(--warn); }
+.decision-card > p { margin: 6px 0 !important; color: var(--ink-2); }
+.decision-tasks { display: flex; flex-direction: column; gap: 4px; }
+.decision-tasks label { display: flex; align-items: center; gap: 6px; }
+.decision-tasks small { color: var(--ink-3); font-size: var(--fs-sm); margin-top: 4px; }
+
+/* The board: rounds as tabs, tasks in lanes, a task's details in place. */
+.board { overflow: hidden; }
+.board-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; }
+.board-head > strong { font-size: var(--fs-base); }
+.board-rounds { display: flex; gap: 4px; overflow-x: auto; margin-left: auto; }
+.board-rounds button { display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font: inherit; font-size: var(--fs-sm); color: var(--ink-3); cursor: pointer; white-space: nowrap; }
+.board-rounds button.selected { border-color: var(--brand); color: var(--ink); font-weight: 700; }
+.board-rounds button.status-accepted svg { color: var(--ok); }
+.board-round-goal { margin: 0 14px 8px; font-size: var(--fs-sm); color: var(--ink-3); }
+.board-round-goal strong { color: var(--ink-2); }
+.board-empty { margin: 4px 14px 14px; padding: 18px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); color: var(--ink-3); font-size: var(--fs-md); line-height: 1.6; }
+.board-lanes { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+.board-lane { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: var(--r-md); background: var(--surface-2); }
+.board-lane h4 { display: flex; align-items: center; gap: 6px; margin: 0 2px 2px; font-size: var(--fs-sm); color: var(--ink-2); }
+.board-lane h4 span { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--sunken); display: grid; place-items: center; font-size: var(--fs-xs); color: var(--ink-3); }
+.board-lane.lane-doing h4 { color: var(--ok); }
+.board-lane.lane-review h4 { color: var(--focus); }
+.board-lane.lane-stuck { background: var(--bad-soft); }
+.board-lane.lane-stuck h4 { color: var(--bad); }
+.task-tile { position: relative; display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--m-line, var(--line)); border-radius: var(--r-md); background: var(--surface); font: inherit; text-align: left; color: var(--ink); cursor: pointer; transition: border-color .15s, transform .15s var(--ease); }
+.task-tile:hover { border-color: var(--m-line, var(--line-strong)); transform: translateY(-1px); }
+.task-tile-top { display: flex; align-items: center; gap: 7px; }
+.task-tile-top strong { font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-tile small { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-tile-returns { position: absolute; top: 7px; right: 8px; font-size: var(--fs-xs); color: var(--warn); }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; animation: glow 1.6s ease-in-out infinite; }
+.task-detail { flex: 1; min-height: 0; overflow-y: auto; padding: 0 14px 14px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-md); }
+.task-detail > .link-button { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); }
+.task-detail-head { display: flex; align-items: flex-start; gap: 9px; }
+.task-detail-head > div { flex: 1; min-width: 0; }
+.task-detail-head strong { display: block; font-size: var(--fs-base); }
+.task-detail-head small { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; font-size: var(--fs-sm); color: var(--ink-3); }
+.task-detail p { margin: 0; color: var(--ink-2); }
+.task-detail h4 { margin: 4px 0 0; font-size: var(--fs-sm); color: var(--ink-3); }
+.task-detail ul { margin: 0; padding-left: 18px; }
+.task-chip.status-running, .task-chip.status-queued, .task-chip.status-awaiting_review { background: var(--ok-soft); color: var(--ok); }
+.task-chip.status-review_passed, .task-chip.status-integrated, .task-chip.status-accepted { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); color: var(--ok); }
+.task-chip.status-correcting { background: var(--warn-soft); color: var(--warn); }
+.task-chip.status-blocked, .task-chip.status-escalated { background: var(--bad-soft); color: var(--bad); }
+.task-meta { font-size: var(--fs-sm); color: var(--ink-3) !important; }
+.task-meta.bad, .task-meta .bad { color: var(--bad) !important; }
+.task-meta.review-passed { color: var(--ok) !important; }
+.task-meta.review-changes_requested { color: var(--warn) !important; }
+.task-findings { font-size: var(--fs-sm); }
+.task-findings li { margin-bottom: 4px; }
+.task-findings small { display: block; color: var(--ink-3); }
+.finding-blocking strong { color: var(--bad); }
+.finding-should-fix strong { color: var(--warn); }
+
+@media (max-width: 1100px) { .project-room-grid { grid-template-columns: minmax(0, 1fr) 300px; } .project-room-numbers span { padding: 4px 8px; } }
+@media (max-width: 860px) { .project-room { overflow-y: auto; } .project-room-grid { grid-template-columns: 1fr; } .meeting, .project-room-grid > .room-embedded { min-height: 520px; } .plan-columns { grid-template-columns: 1fr; } }
+.task-giveup { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-md); background: var(--bad-soft); }
+.task-giveup textarea { resize: vertical; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-md); }
+.task-giveup .round-actions { margin-top: 0; }
+.meeting-alert-item { margin-top: 6px; padding-top: 6px; border-top: 1px dashed color-mix(in srgb, var(--bad) 30%, transparent); display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.task-stuck { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.plan-review-level, .review-disputes label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; font-size: var(--fs-sm); color: var(--ink-3); }
+.plan-review-level select, .review-disputes select { min-height: 30px; max-width: 100%; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); font: inherit; }
+.round-review-level { display: block; margin-bottom: 8px; color: var(--ink-3); font-size: var(--fs-sm); }
+.requested-check, .review-disputes > div { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); overflow-wrap: anywhere; }
+.requested-check h4 { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.requested-check small, .review-disputes small { color: var(--ink-3); font-size: var(--fs-sm); }
+
+/* The meeting room's chat is the shared room view, framed like the board beside it. */
+.project-room-grid > .room-embedded { min-height: 0; min-width: 0; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; background: color-mix(in srgb, var(--surface) 78%, transparent); }
+.room-embedded .room-top { background: color-mix(in srgb, var(--surface) 88%, transparent); }
+.room-embedded .room-messages { padding: 14px 18px 18px; }
+.room-embedded .room-composer { padding: 6px 14px 10px; gap: 6px; }
+/* The chat keeps room to read while cards wait in the dock; the composer is shorter than the tea room's. */
+.room-embedded .room-messages { flex: 1 1 auto; min-height: 64px; }
+.room-embedded .room-composer, .room-embedded .room-top { flex: none; }
+.room-embedded .composer textarea { height: 46px; padding-top: 10px; }
+.room-tool-row { display: flex; align-items: center; gap: 10px; padding: 4px 10px 4px 14px; border-bottom: 1px solid var(--line); font-size: var(--fs-sm); color: var(--ink-3); }
+.room-tool-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; color: var(--ink); font-weight: 600; font-size: var(--fs-md); white-space: nowrap; }
+.room-tool-title small { color: var(--ink-3); font-weight: 400; font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-room-empty h2 { font-size: var(--fs-lg); }
+.project-room-empty p { max-width: 420px; }
+
+/* Flow messages in the chat: what was posted, folded when long, and where it stands now. */
+.flow-line { align-items: flex-start; }
+.flow-line-body { flex: 1; min-width: 0; max-width: 640px; display: flex; flex-direction: column; gap: 4px; }
+.flow-message { padding: 10px 13px; border: 1px solid var(--m-line, var(--line)); border-radius: 6px var(--r-lg) var(--r-lg) var(--r-lg); background: var(--surface); box-shadow: var(--shadow-sm); font-size: var(--fs-md); }
+.flow-message.pending { border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+.flow-message header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.flow-message-status { padding: 1px 8px; border-radius: 999px; background: var(--sunken); color: var(--ink-2); font-size: var(--fs-sm); }
+.flow-message.pending .flow-message-status { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+.flow-message header small { color: var(--ink-3); font-size: var(--fs-sm); }
+.flow-message-text { color: var(--ink-2); }
+.flow-message-text.folded { max-height: 8.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+
+.dock-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-md); color: var(--ink-2); line-height: 1.6; }
+.dock-row > svg { flex: none; color: var(--ink-3); }
+.dock-row p { flex: 1; margin: 0; }
+.dock-row .button { flex: none; }
+.lead-picker .round-actions { margin-top: 2px; }
+.lead-option > span { font-size: var(--fs-md); }
+.plan-revise, .round-reject { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.plan-revise textarea, .round-reject textarea { width: 100%; resize: vertical; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--bg); color: var(--ink); font: inherit; font-size: var(--fs-md); }
+.inline-notice .icon-button { margin-left: auto; }
+
+/* 请大家一起来: projects as a list of choices, the new one opening its folder fields. */
+.invite-projects { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.invite-project { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; }
+.invite-project:hover { border-color: var(--line-strong); }
+.invite-project.selected { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent); }
+.invite-project > svg { flex: none; color: var(--ink-3); }
+.invite-project span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.invite-project small { color: var(--ink-3); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.invite-project.new { border-style: dashed; }
+.invite-check { flex: none; color: var(--brand); }
+.invite-new { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+@media (max-width: 1180px) { .room-tool-title small { display: none; } }
+/* In the narrower meeting column the people stay on one line and the discussion controls wrap below them. */
+.room-embedded .room-presence { padding: 6px 14px 8px; }
+.room-embedded .room-presence-members { flex: 1 1 0; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 24px; }
+.room-embedded .room-presence-status { margin-left: 0; }
+.room-embedded .room-presence-detail { padding-left: 0; max-height: 48px; }
+@media (max-width: 1180px) { .project-room-grid { grid-template-columns: minmax(0, 1fr) 270px; } .room-embedded .composer-hint { display: none; } }
+
+/* What waits for the owner sits just above the composer, in the flow: the chat shrinks to make room instead of
+   being covered, and stays pinned to its latest message. One line folded, cards open. */
+.room-embedded .room-composer { position: relative; }
+.room-dock-anchor { position: relative; z-index: 2; }
+.flow-dock { display: flex; flex-direction: column; max-height: min(28vh, 300px); border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 97%, transparent); backdrop-filter: blur(10px); box-shadow: 0 14px 34px -14px rgb(45 28 12 / 38%); overflow: hidden; }
+.flow-dock.has-waiting { border-color: color-mix(in srgb, var(--warn) 55%, var(--line-strong)); }
+.flow-dock-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 4px; }
+.flow-dock-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 0; border-radius: var(--r-md); background: none; color: var(--ink); font: inherit; font-size: var(--fs-md); text-align: left; cursor: pointer; }
+.flow-dock-toggle:hover { background: var(--sunken); }
+.flow-dock-toggle > svg { flex: none; color: var(--ink-3); }
+.flow-dock-toggle strong { flex: none; }
+.flow-dock-count { flex: none; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--warn); color: #fff; font-size: var(--fs-sm); font-weight: 700; line-height: 20px; text-align: center; }
+.flow-dock-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.flow-dock-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 12px; border-top: 1px solid var(--line); animation: view-in .18s ease-out both; }
+.flow-dock-body .meeting-card, .flow-dock-body .meeting-line, .flow-dock-body .lead-picker, .flow-dock-body .meeting-alert { align-self: stretch; max-width: none; }
+/* The owner's verdict stays in reach while a long card scrolls inside the dock. */
+.flow-dock-body .round-actions.verdict, .flow-dock-body .round-actions.plan-confirm { position: sticky; bottom: -12px; z-index: 1; margin: 8px -14px -12px; padding: 8px 14px; background: color-mix(in srgb, var(--surface) 94%, transparent); border-top: 1px solid var(--line); border-radius: 0 0 16px 16px; backdrop-filter: blur(6px); }
+/* Settled flow messages read as one line in the conversation; open one to see its text. */
+.flow-message.settled { padding: 7px 12px; box-shadow: none; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.flow-message header { margin-bottom: 0; }
+.flow-message.open header { margin-bottom: 6px; }
+.flow-message-title { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.flow-message-title > svg { color: var(--ink-3); }
+/* The round's report reads as a summary for the owner; how it was checked folds under 验证细节. */
+.round-report h4:first-child { margin-top: 6px; }
+.round-report-summary { font-size: var(--fs-base); line-height: 1.7; color: var(--ink); }
+.round-deliverables { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 0; }
+.round-file { padding: 1px 8px; border-radius: var(--r-sm); background: var(--sunken); color: var(--ink-2); font-size: var(--fs-sm); font-family: var(--font-mono, ui-monospace, monospace); }
+.round-details { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 6px; font-size: var(--fs-md); color: var(--ink-2); }
+.round-details > summary { cursor: pointer; color: var(--ink-3); font-size: var(--fs-sm); }
+.round-validation p { margin: 4px 0 0; }
+.round-system-note { display: inline-block; padding: 1px 8px; border-radius: var(--r-sm); background: var(--sunken); color: var(--ink-3); font-size: var(--fs-sm); }
+.project-stage strong { font-weight: 600; color: var(--ink); }
+.round-hold { flex-basis: 100%; color: var(--warn); font-size: var(--fs-sm); }
+
+/* A round's product files: a compact list, read in place; the project's current file sits beside the submitted one. */
+.round-results { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: color-mix(in srgb, var(--sunken) 45%, var(--surface)); }
+.round-results-head { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 4px; }
+.round-results-toggle { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 5px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--ink); font: inherit; font-size: var(--fs-md); text-align: left; cursor: pointer; }
+.round-results-toggle:hover { background: var(--sunken); }
+.round-results-toggle > svg { color: var(--ink-3); }
+.round-results-toggle small { color: var(--ink-3); font-size: var(--fs-sm); }
+.round-results-applied { flex: none; padding: 1px 8px; border-radius: 999px; background: var(--warn-soft); color: var(--warn); font-size: var(--fs-sm); font-weight: 600; }
+.round-results-applied.yes { background: color-mix(in srgb, var(--good, #2f8f5b) 14%, transparent); color: var(--good, #2f8f5b); }
+.round-results-body { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
+.round-results-note { margin: 0; color: var(--ink-3); font-size: var(--fs-sm); }
+.result-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.result-file { display: flex; align-items: center; gap: 4px; border-radius: var(--r-sm); }
+.result-file.selected, .result-file:hover { background: var(--surface); }
+.result-file-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 6px; border: 0; background: none; color: var(--ink); font: inherit; font-size: var(--fs-md); text-align: left; cursor: pointer; }
+.result-file-main > svg { flex: none; color: var(--ink-3); }
+.result-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); }
+.result-kind { flex: none; color: var(--ink-3); font-size: var(--fs-sm); }
+.result-file.change-added .result-kind { color: var(--good, #2f8f5b); }
+.result-file.change-deleted .result-kind, .result-file.change-deleted .result-path { color: var(--bad); }
+.result-file.change-deleted .result-path { text-decoration: line-through; }
+.result-tag { flex: none; padding: 0 6px; border-radius: var(--r-sm); background: var(--sunken); color: var(--ink-2); font-size: var(--fs-xs); }
+.result-file-tools { flex: none; display: inline-flex; gap: 2px; padding-right: 2px; }
+.result-file-tools .icon-button { width: 26px; height: 26px; }
+.round-results-all { align-self: flex-start; font-size: var(--fs-sm); }
+.result-preview { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.result-preview header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: var(--fs-md); }
+.result-preview header strong { font-family: var(--font-mono, ui-monospace, monospace); }
+.result-preview header small { color: var(--ink-3); font-size: var(--fs-sm); }
+.result-preview header .icon-button { margin-left: auto; }
+.result-preview pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px 10px; border-radius: var(--r-sm); background: var(--sunken); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.result-preview img { max-width: 100%; max-height: 360px; object-fit: contain; align-self: flex-start; border-radius: var(--r-sm); }
+.result-preview-markdown { max-height: 320px; overflow: auto; font-size: var(--fs-md); }
+.round-results-error { margin: 0; color: var(--bad); font-size: var(--fs-sm); }
+.round-results-info { margin: 0; color: var(--ink-3); font-size: var(--fs-sm); }
+
+/* Work log: a dense timeline, one line per record; commands in monospace, raw records folded. */
+.work-log-body { display: flex; flex-direction: column; gap: 8px; }
+.work-log-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.work-log-auto { flex: 1; min-width: 240px; display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-md); color: var(--ink-2); }
+.work-log-actions { display: inline-flex; align-items: center; gap: 6px; }
+.work-log-actions .button svg { margin-right: 2px; }
+.work-log-hint { margin: 0; color: var(--ink-3); font-size: var(--fs-sm); }
+.work-log-meta { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border-radius: var(--r-md); background: var(--sunken); font-size: var(--fs-md); }
+.work-log-meta summary { cursor: pointer; color: var(--ink-2); }
+.work-log-record { margin: 4px 0 0; color: var(--ink-2); }
+.work-log-modal .work-log-list { gap: 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.log-entry { display: grid; grid-template-columns: 58px 18px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 12px; border-top: 1px solid var(--line); font-size: var(--fs-md); }
+.log-entry:first-child { border-top: 0; }
+.log-entry:nth-child(even) { background: color-mix(in srgb, var(--sunken) 40%, transparent); }
+.log-time { color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: var(--fs-sm); padding-top: 1px; }
+.log-icon { color: var(--ink-3); padding-top: 1px; }
+.log-entry.phase-completed .log-icon { color: var(--good, #2f8f5b); }
+.log-entry.phase-failed .log-icon { color: var(--bad); }
+.log-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.log-text { margin: 0; color: var(--ink); line-height: 1.55; }
+.log-member { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; font-weight: 600; color: var(--ink-2); vertical-align: -2px; }
+.log-status { margin: 0; color: var(--ink-3); font-size: var(--fs-sm); }
+.log-entry.phase-failed .log-status { color: var(--bad); }
+.log-command { display: block; padding: 4px 8px; border-radius: var(--r-sm); background: var(--sunken); color: var(--ink-2); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-files { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; }
+.log-raw summary { cursor: pointer; color: var(--ink-3); font-size: var(--fs-sm); }
+.log-raw pre { max-height: 240px; overflow: auto; margin: 4px 0 0; padding: 6px 8px; border-radius: var(--r-sm); background: var(--sunken); font-size: var(--fs-sm); }
+.work-log-more { align-self: center; }
+.work-log-through { margin-right: auto; color: var(--ink-3); font-size: var(--fs-sm); }
+/* "请 TA 离开" is a corner badge shown on hover/focus, so chips line up the same in every room. */
+.guest-chip-group { position: relative; display: inline-flex; align-items: center; }
+.guest-chip-leave { position: absolute; top: -5px; right: -5px; z-index: 1; display: grid; place-items: center; width: 17px; height: 17px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-3); box-shadow: var(--shadow-sm); opacity: 0; transform: scale(.8); transition: opacity .15s, transform .15s var(--ease); }
+.guest-chip-group:hover .guest-chip-leave, .guest-chip-leave:focus-visible { opacity: 1; transform: none; }
+.guest-chip-leave:hover { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.guest-chip-leave:disabled { display: none; }
+.member-project-config { display: grid; gap: 8px; padding: 10px; }
+.member-project-config .field { margin: 0; }
+.member-project-config .task-meta { margin: 0; }
+/* In the invite picker the choices sit under the member's card, two small selects side by side. */
+/* 请大家一起来: each member is one card; choosing them opens their project settings inside the same card. */
+.collaborator-slot { display: flex; flex-direction: column; min-width: 0; border: 1.5px solid var(--line); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; transition: border-color .15s, background .15s; }
+.collaborator-slot:hover:not(.unavailable) { border-color: var(--m-line, var(--line-strong)); }
+.collaborator-slot.selected { border-color: var(--m); background: var(--m-soft); }
+.collaborator-slot.unavailable { opacity: .6; }
+.collaborator-slot .collaborator-choice { border: 0; border-radius: 0; background: transparent; }
+.collaborator-slot .collaborator-choice.unavailable { opacity: 1; }
+.collaborator-slot .member-project-config { display: flex; flex-direction: column; gap: 6px; padding: 0 12px 11px; animation: rise .2s var(--ease) both; }
+.collaborator-slot .member-project-config .field { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 6px; margin: 0; font-size: var(--fs-sm); color: var(--ink-3); }
+.collaborator-slot .member-project-config select { width: 100%; height: 28px; min-height: 28px; padding: 0 6px; border-radius: var(--r-sm); background: var(--surface); font-size: var(--fs-sm); }
+.collaborator-slot .member-project-config > small { font-size: var(--fs-xs); line-height: 1.5; color: var(--ink-3); }
+.invite-modal .collaborator-picker { align-items: start; }
+.flow-next-step { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+.flow-next-step small { color:var(--ink-3);font-size:var(--fs-sm);white-space:nowrap; }
+.project-review-help { margin:0;padding:7px 22px;color:var(--ink-3);font-size:var(--fs-sm);line-height:1.6; }
+.task-workspace-location { display:flex;flex-direction:column;gap:4px;padding:8px 0;font-size:var(--fs-sm);color:var(--ink-3); }
+.task-workspace-location p { margin:0;overflow-wrap:anywhere; }
+.task-workspace-location .link-button { align-self:flex-start; }

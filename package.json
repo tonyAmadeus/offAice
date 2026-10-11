@@ -1,0 +1,49 @@
+{
+  "name": "airoom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "本地多成员 AI 工作台",
+  "main": "dist/main.mjs",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/launch.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/build-job.mjs && node --import tsx --test tests/*.test.ts",
+    "verify": "node scripts/verify.mjs",
+    "package": "npm run build && electron-builder --win nsis portable --config electron-builder.json",
+    "package:green": "node scripts/build.mjs && electron-builder --win --dir --config electron-builder.json && node scripts/package-green.mjs",
+    "postpackage": "node scripts/package-handoff.mjs",
+    "deploy": "node scripts/deploy-runtime.mjs"
+  },
+  "dependencies": {
+    "7zip-bin": "5.2.0",
+    "lucide-react": "1.51.0",
+    "npm": "12.1.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "undici": "8.11.2"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-code": "2.1.288",
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "@openai/codex": "0.160.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.6.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.2"
+  },
+  "allowScripts": {
+    "@anthropic-ai/claude-code@2.1.288": true,
+    "esbuild@0.28.2": true,
+    "electron@44.5.1": true,
+    "electron-winstaller@5.4.0": true
+  }
+}

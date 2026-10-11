@@ -1,0 +1,14 @@
+{
+  "appId": "local.airoom.desktop",
+  "productName": "AIROOM",
+  "directories": { "output": "release" },
+  "asar": false,
+  "electronDist": "node_modules/electron/dist",
+  "npmRebuild": false,
+  "files": ["dist/**/*", "package.json", "package-lock.json", "!node_modules/**/*", "!**/*.map"],
+  "afterPack": "scripts/runtime-dependencies.mjs",
+  "afterSign": "scripts/build-manifest.mjs",
+  "win": { "target": ["nsis", "portable"], "icon": "build/airoom.ico", "requestedExecutionLevel": "asInvoker", "signAndEditExecutable": true },
+  "nsis": { "artifactName": "AIROOM-Setup-${version}.exe", "oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": "always", "createStartMenuShortcut": true, "shortcutName": "AIROOM", "deleteAppDataOnUninstall": false, "runAfterFinish": true },
+  "portable": { "artifactName": "AIROOM-${version}-Windows.exe", "requestExecutionLevel": "user" }
+}

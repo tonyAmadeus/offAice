@@ -1,0 +1,7 @@
+.desk-folder-list { display:flex; flex-direction:column; gap:8px; }
+.desk-folder-option { display:flex; align-items:center; gap:12px; width:100%; text-align:left; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:var(--r-md); padding:12px; cursor:pointer; }
+.desk-folder-option.selected { border-color:var(--focus); }
+.desk-folder-option > span:first-of-type { min-width:0; flex:1; }
+.desk-folder-option strong,.desk-folder-option small { display:block; }
+.desk-folder-option small { overflow-wrap:anywhere; color:var(--ink-3); margin-top:4px; }
+.desk-folder-status { font-size:var(--fs-sm); color:var(--ink-3); white-space:nowrap; }

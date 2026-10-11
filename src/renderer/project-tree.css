@@ -1,0 +1,11 @@
+.project-tree-toggle{flex:0 0 21px;width:21px;height:30px;display:grid;place-items:center;border:0;background:transparent;color:var(--ink-3);padding:0;cursor:pointer;border-radius:5px}
+.project-tree-toggle:hover{background:var(--surface-2)}
+.project-tree-spacer{flex:0 0 21px;width:21px}
+.project-tree-row{min-width:0}
+.project-tree-row .list-row-main{min-width:0;padding-left:3px}
+.project-tree-row .list-row-main span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-hierarchy-form .field textarea{resize:vertical;min-height:84px}
+.progress-children{display:flex;gap:7px;align-items:center;font-size:var(--fs-sm);margin:0 0 12px;color:var(--ink-3)}
+
+/* `.project-item span { flex: 1 }` (the project name) also matched the leaf spacer and pushed leaf sub-projects to the middle. */
+.project-tree-row > .project-tree-spacer { flex: 0 0 21px; }

@@ -1,0 +1,31 @@
+.roundtable-room{display:flex;flex-direction:column;min-width:0;min-height:0;flex:1;height:100%;overflow:hidden}
+.roundtable-room>.room{flex:1;min-height:0}
+.topic-status{margin-left:auto;font-size:var(--fs-sm);color:var(--ink-3);white-space:nowrap}
+/* Empty roundtable: centred like every other empty room. */
+.roundtable-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;align-self:center;max-width:650px}
+.roundtable-empty .button{margin-top:16px}
+.roundtable-dock{padding:10px 16px;border:1px solid var(--line);border-radius:var(--r-md);margin-top:8px;background:var(--surface)}
+.roundtable-dock>p{margin:0 0 5px}.roundtable-dock>.joint-actions{margin-top:8px}
+.roundtable-dock>details{margin-top:8px;max-height:160px;overflow:auto}
+.roundtable-start .joint-fingerprint{white-space:normal;overflow-wrap:anywhere}
+.roundtable-room .joint-material{padding:12px;border:1px solid var(--line);border-radius:var(--r-md)}
+.roundtable-room .joint-candidate,.roundtable-room .joint-conclusion{width:100%;min-width:0;overflow-wrap:anywhere}
+.roundtable-room .flow-line-body{min-width:0}
+
+/* Composer: minutes, stop and send sit together on the right in every room, even where the hint is hidden. */
+.composer-bottom > .composer-hint + .composer-minutes, .composer-bottom > .composer-hint + .stop-button { margin-left: auto; }
+
+/* Dock: status and call count share one row; the discussion material sits below as quiet chips. */
+.roundtable-dock-head{display:flex;align-items:baseline;gap:12px;min-width:0}
+.roundtable-dock-head>p{margin:0;flex:1;min-width:0}
+.roundtable-dock-head>small{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink-3);font-size:var(--fs-sm);white-space:nowrap}
+.roundtable-material{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;font-size:var(--fs-sm)}
+.roundtable-material-label{color:var(--ink-3);margin-right:2px}
+.roundtable-material-chip{padding:2px 8px;border-radius:999px;background:var(--surface-2,var(--line));color:var(--ink-2);white-space:nowrap}
+.roundtable-material-chip.warn{color:var(--warn,var(--lamp));cursor:help}
+.roundtable-material-chip.bad{color:var(--bad);cursor:help}
+.roundtable-loading{flex:1}
+/* One bar: header, then the topic bar; the room below adds no second tool row. */
+.roundtable-room>.room>.room-top:empty{display:none}
+.roundtable-next-step { display:inline-flex;align-items:center;gap:8px; }
+.roundtable-next-step small { color:var(--ink-3);font-size:var(--fs-sm); }

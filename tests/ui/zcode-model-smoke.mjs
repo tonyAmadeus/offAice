@@ -1,0 +1,80 @@
+import '../../scripts/test-bootstrap.mjs';
+import assert from 'node:assert/strict';
+import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {chromium,expect} from '@playwright/test';
+import {createServer} from '../../scripts/ui-test-server.mjs';
+import {Engine} from '../../src/backend/engine.ts';
+import {ZcodeAdapter} from '../../src/backend/adapters/zcode.ts';
+import {catalogCandidate} from '../../src/backend/executor-catalog.ts';
+
+const root=path.resolve('.test-cache/zcode-model-ui');await mkdir(root,{recursive:true});
+const data=await mkdtemp(path.join(root,'run-')),output=path.resolve('.test-cache/ui-zcode-model');await mkdir(output,{recursive:true});
+const previous=process.env.AIROOM_ACP_HOME;process.env.AIROOM_ACP_HOME=path.join(data,'native','acp');
+const id='acp-catalogzcode',command=path.join(data,'program','zcode.cjs'),home=path.join(process.env.AIROOM_ACP_HOME,id),configDirectory=path.join(home,'.zcode','v2');
+await mkdir(path.join(path.dirname(command),'provider'),{recursive:true});await mkdir(configDirectory,{recursive:true});
+await writeFile(command,await readFile(new URL('../fixtures/zcode-cli.cjs',import.meta.url)));
+const provider='account:bigmodel-individual-coding-plan';
+await writeFile(path.join(path.dirname(command),'provider','zcode-builtin.json'),JSON.stringify({schemaVersion:1,revision:30,config:{providerConfigRules:{providerRules:[{providerId:provider,config:{access:{type:'zhipu-account',accountType:'bigmodel',mode:'individual-coding-plan'},builtinModelIds:['GLM-5.3','GLM-5.3-Flash']}}]}}}));
+await writeFile(path.join(configDirectory,'provider_config.json'),JSON.stringify({schemaVersion:1,config:{defaultModelSelection:{providerId:provider,modelId:'GLM-5.3'}}}));
+await writeFile(path.join(configDirectory,'credentials.json'),JSON.stringify({'oauth:bigmodel:access_token':'fixture-only',zcodejwttoken:'fixture-only',[`account-provider:${provider}:identity`]:'fixture-user',[`account-provider:coding-plan:${provider}:account:fixture-user:api-key`]:'fixture-only'}));
+const original=await readFile(path.join(configDirectory,'provider_config.json'));
+const executor={...catalogCandidate('zcode',command),authentication:'bigmodel'};
+const factory=providerId=>{
+  if(providerId===id){const adapter=new ZcodeAdapter(executor);adapter.start=async()=>assert.fail('UI verification must not call a model');return adapter;}
+  return {probe:async()=>({id:providerId,name:providerId,available:true,auth:'account',detail:'fixture',capabilities:{streaming:true,write:true,history:true,cancel:'native',steer:false}}),start:async()=>assert.fail('No model task during UI checks'),stop:async()=>{}};
+};
+const engine=new Engine(data,()=>{},()=>{},factory);engine.store.put('executors',id,executor);
+const person=await engine.invoke('team.save',{member:{name:'GLM 模型验收',executor:id}});
+await engine.invoke('desk.open',{memberId:person.id});await engine.invoke('desk.topic',{memberId:person.id,title:'模型选择话题'});
+const room=await engine.invoke('desk.open',{memberId:person.id}),session=engine.store.get('sessions',room.sessionId);
+const source=path.join(data,'source');await mkdir(source);await writeFile(path.join(source,'README.txt'),'模型界面测试');
+const project=await engine.invoke('project.create',{directory:source,name:'ZCode 模型项目'});
+await engine.probe();
+const server=await createServer({configFile:false,root:process.cwd(),logLevel:'silent',server:{host:'127.0.0.1',port:0}});await server.listen();
+const browser=await chromium.launch({channel:'msedge',headless:true}),page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+await page.exposeFunction('__rpc',async(method,params)=>{
+  if(['window.attention','window.show','renderer.error'].includes(method))return {};
+  const result=await engine.invoke(method,params??{});
+  if(method!=='snapshot'&&method!=='provider.config')await page.evaluate(snapshot=>window.__listeners?.forEach(listener=>listener({type:'snapshot',snapshot})),engine.snapshot());
+  return result;
+});
+await page.addInitScript(()=>{window.__listeners=[];window.airoom={invoke:window.__rpc,onEvent:listener=>{window.__listeners.push(listener);return()=>{};}};});
+try{
+  await page.goto('http://127.0.0.1:'+server.httpServer.address().port);
+  await page.getByRole('button',{name:'设置与连接',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'设置与成员连接'}),connection=dialog.locator(`[data-provider="${id}"]`);
+  const model=connection.getByLabel('模型',{exact:true}),effort=connection.getByLabel('思考程度',{exact:true});
+  await expect(model).toBeEnabled();await expect(model.locator('option[value="GLM-5.3-Flash"]')).toHaveCount(1);
+  await model.selectOption('GLM-5.3-Flash');await effort.selectOption('low');
+  await connection.getByRole('button',{name:'刷新选项',exact:true}).click();await expect(model).toHaveValue('GLM-5.3-Flash');
+  await page.screenshot({path:path.join(output,'connection-model-list.png'),animations:'disabled'});
+  await dialog.getByRole('button',{name:'保存设置',exact:true}).click();await expect(dialog).toHaveCount(0);
+  assert.equal(engine.settings.models[id],'GLM-5.3-Flash');assert.equal(engine.settings.efforts[id],'low');
+  await page.getByRole('button',{name:'设置与连接',exact:true}).click();
+  await dialog.getByRole('button',{name:'团队成员',exact:true}).click();
+  await dialog.getByRole('button',{name:'编辑 GLM 模型验收 的人物卡',exact:true}).click();
+  await dialog.getByLabel('这位成员默认的模型').selectOption('GLM-5.3');await dialog.getByLabel('思考程度').selectOption('high');
+  await dialog.getByRole('button',{name:'保存人物卡',exact:true}).click();await dialog.getByRole('button',{name:'关闭对话框',exact:true}).click();
+  assert.equal(engine.store.get('members',person.id).model,'GLM-5.3');
+  await page.getByRole('button',{name:'GLM 模型验收 的工位',exact:true}).click();
+  await page.getByRole('button',{name:'选择话题模型和思考程度',exact:true}).click();
+  const popover=page.getByRole('dialog',{name:'这个会话的模型'});
+  await popover.getByLabel('模型').selectOption('GLM-5.3-Flash');await popover.getByLabel('思考程度').selectOption('high');
+  await page.screenshot({path:path.join(output,'session-model-list.png'),animations:'disabled'});
+  await popover.getByRole('button',{name:'保存',exact:true}).click();await expect(popover).toHaveCount(0);
+  assert.equal(engine.store.get('sessions',session.id).model,'GLM-5.3-Flash');
+  await page.locator('.project-item .list-row-main',{hasText:project.name}).click();
+  const invite=page.getByRole('dialog',{name:'请大家一起来'});await invite.getByRole('checkbox',{name:'邀请 GLM 模型验收',exact:true}).check();
+  await invite.getByRole('combobox',{name:'GLM 模型验收 项目模型'}).selectOption('value:GLM-5.3');
+  await invite.getByRole('combobox',{name:'GLM 模型验收 项目思考程度'}).selectOption('value:low');
+  await page.screenshot({path:path.join(output,'project-model-list.png'),animations:'disabled'});
+  await invite.getByRole('button',{name:'进入会议室',exact:true}).click();
+  assert.deepEqual(engine.store.get('projects',project.id).memberConfigs[person.id],{model:'GLM-5.3',effort:'low'});
+  assert.deepEqual(await readFile(path.join(configDirectory,'provider_config.json')),original);
+  await assert.rejects(readFile(path.join(home,'calls.jsonl')),/ENOENT/);assert.equal(engine.store.list('runs').length,0);assert.deepEqual(errors,[]);
+  await writeFile(path.join(output,'result.json'),JSON.stringify({realAdapterProbe:true,settingsModels:true,characterModels:true,sessionModels:true,projectModels:true,officialDefaultPreserved:true,modelRequests:0},null,2));
+  console.log('ZCode model UI passed: native adapter discovery, connection/card/session/project selectors, thinking options and default preservation. No model calls.');
+}catch(error){await page.screenshot({path:path.join(output,'failure.png'),animations:'disabled'});throw error;}
+finally{await browser.close();await server.close();await engine.close();if(previous===undefined)delete process.env.AIROOM_ACP_HOME;else process.env.AIROOM_ACP_HOME=previous;assert.equal(path.dirname(data),root);await rm(data,{recursive:true,force:true,maxRetries:5});}

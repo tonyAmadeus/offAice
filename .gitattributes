@@ -1,0 +1,2 @@
+# Preserve Windows line endings for the project cleanup launcher.
+Clean-AIROOM.cmd text eol=crlf

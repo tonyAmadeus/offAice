@@ -1,0 +1,17 @@
+node_modules/
+dist/
+release/
+.npm-cache/
+.electron-cache/
+.electron-temp/
+.builder-cache/
+.builder-temp/
+.airoom-smoke/
+.test-cache/
+.runtime-temp/
+.airoom/
+.airoom-data/
+.env
+*.log
+tests/results/
+tests/ui/results/
