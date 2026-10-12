@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import type { ProjectFlowController } from '../src/backend/project-flow';
 import type { Adapter, AdapterContext, Approval, Project, RoomId, Run } from '../src/shared/types';
 import type { FlowOperation, PlanPayload, ProjectFlowSnapshot, TaskSupplementResult } from '../src/shared/project-flow';

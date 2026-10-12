@@ -29,8 +29,8 @@ export interface TeamMember {
 
 export function buildTeam(profiles: MemberProfile[]): TeamMember[] {
   return profiles.map(card => {
-    const builtIn = BUILTIN_ART[card.id];
-    const art = card.portrait ? assetUrl(card.portrait) : card.builtIn ? builtIn?.art : undefined;
+    const builtIn = BUILTIN_ART[card.templateId ?? card.id];
+    const art = card.portrait ? assetUrl(card.portrait) : card.builtIn || card.templateId ? builtIn?.art : undefined;
     return {
       id: card.id, executor: card.executor, name: card.name, product: PROVIDER_NAMES[card.executor], motto: card.motto ?? '',
       color: card.color ?? BUILTIN_MEMBERS.find(member => member.id === card.id)?.color ?? '#8a6a52',
@@ -65,7 +65,11 @@ export function makeTeam(profiles: MemberProfile[], removedProfiles: MemberProfi
   const members = buildTeam(profiles);
   const historical = buildTeam(removedProfiles);
   const get = (id: string | undefined) => id === 'gemini' ? GEMINI_SEAT : members.find(member => member.id === id)??historical.find(member=>member.id===id);
-  const ofSession: Team['ofSession'] = session => session ? get(session.memberId??session.provider)??displayFallback(session.memberId??session.provider) : members[0]??displayFallback();
+  const ofSession: Team['ofSession'] = session => {
+    if(!session)return members[0]??displayFallback();
+    const member=get(session.memberId??session.provider)??displayFallback(session.memberId??session.provider);
+    return member.executor===session.provider?member:{...member,executor:session.provider as PermissionMember,product:PROVIDER_NAMES[session.provider],card:{...member.card,executor:session.provider as PermissionMember}};
+  };
   return { members, get, ofSession, ofRun: (run, sessions) => ofSession(sessions.find(session => session.id === run.sessionId) ?? { provider: run.provider }) };
 }
 const TeamContext = createContext<Team>(makeTeam(BUILTIN_MEMBERS));

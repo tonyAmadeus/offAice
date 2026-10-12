@@ -81,6 +81,11 @@ try {
   await page.waitForFunction(()=>typeof window.airoom?.invoke==='function');
   const snapshot=await page.evaluate(()=>window.airoom.invoke('snapshot'));
   assert.ok(snapshot?.backendReady,'utility worker + MessagePort RPC did not become ready');
+  assert.deepEqual(snapshot.members,[],'first launch has no pre-created character cards');
+  assert.deepEqual(snapshot.executors,[],'first launch has no pre-created connections');
+  assert.deepEqual(await page.evaluate(()=>window.airoom.invoke('provider.probe')),[],'first launch does not discover unconfigured programs');
+  // The rest of this scenario explicitly adds its team through the same user action.
+  for(const [id,name] of [['claude','Claudia'],['codex','Gptia'],['dsh','DS']])await page.evaluate(({id,name})=>window.airoom.invoke('team.save',{addTemplate:true,member:{id,executor:id,name,templateId:id}}),{id,name});
   await assert.rejects(page.evaluate(()=>window.airoom.invoke('provider.tokenLogin',{provider:'claude'})),/官方 Claude Code/,'fresh installations do not collect subscription tokens');
   await assert.rejects(page.evaluate(()=>window.airoom.invoke('secret.set',{provider:'claude',value:'sk-ant-fixture-new-token'})),/官方 Claude Code/,'the main process also refuses a fresh subscription-token write');
   assert.equal(snapshot.dataDirectory,dataDirectory);assert.equal(snapshot.projects.length,0);

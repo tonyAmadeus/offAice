@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { storeGeneratedImage } from '../src/backend/generated-images';
 import type { Adapter, AdapterContext, Attachment, ProviderId, Run } from '../src/shared/types';
 import { IMAGE_SEND_MAX } from '../src/shared/attachments';

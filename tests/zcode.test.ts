@@ -8,7 +8,7 @@ import {ZcodeAdapter} from '../src/backend/adapters/zcode';
 import {completeZcodeEntry,zcodeRelease} from '../src/backend/zcode-install';
 import {DEFAULT_SETTINGS} from '../src/shared/defaults';
 import type {AcpExecutor,AdapterContext,TimelineEvent} from '../src/shared/types';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import {zcodeFailure} from '../src/backend/adapters/zcode-account';
 import {loginZcodeBigmodel} from '../src/backend/zcode-login';
 import {zcodeLoginService} from './fixtures/zcode-login';
@@ -94,14 +94,19 @@ test('ZCode accepts only a declared model on the native subscription channel',as
 
 for(const available of [true,false])test(`ZCode login status finishes after the connection check (${available?'passed':'failed'})`,async()=>{
   const f=await fixture(),previous=process.env.AIROOM_ACP_HOME;
+  let finishCheck!:()=>void;
+  const checkGate=new Promise<void>(resolve=>{finishCheck=resolve;});
   process.env.AIROOM_ACP_HOME=f.context.env.AIROOM_ACP_HOME;
-  const states:any[]=[],engine=new Engine(path.join(f.directory,'engine'),event=>{if(event.type==='executor-login')states.push(event.state);},()=>{},id=>({probe:async()=>({id,name:'ZCode',available,runtimeReady:true,auth:available?'subscription':'unknown',detail:available?'connected':'连接检查超时',capabilities:{steer:false,cancel:'native',streaming:false,write:true,history:true}}),start:async()=>assert.fail('a login check must never prompt a model'),stop:async()=>{}}));
+  const states:any[]=[],engine=new Engine(path.join(f.directory,'engine'),event=>{if(event.type==='executor-login')states.push(event.state);},()=>{},id=>({probe:async()=>{await checkGate;return {id,name:'ZCode',available,runtimeReady:true,auth:available?'subscription':'unknown',detail:available?'connected':'连接检查超时',capabilities:{steer:false,cancel:'native',streaming:false,write:true,history:true}};},start:async()=>assert.fail('a login check must never prompt a model'),stop:async()=>{}}));
   try{
     engine.store.put('executors',f.executor.id,f.executor);
     await engine.invoke('executor.authenticate',{id:f.executor.id,methodId:'zai'});
+    assert.match((await engine.invoke('executor.loginStatus',{id:f.executor.id}) as {message:string}).message,/正在检查/);
+    finishCheck();
+    for(let attempt=0;attempt<100&&!/连接检查(通过|未通过)/.test(states.at(-1)?.message??'');attempt++)await new Promise(resolve=>setTimeout(resolve,10));
     const status=await engine.invoke('executor.loginStatus',{id:f.executor.id}) as {phase:string;message:string;url?:string;code?:string};
     assert.equal(status.phase,'completed');assert.match(status.message,available?/连接检查通过/:/连接检查未通过：连接检查超时/);assert.doesNotMatch(status.message,/正在检查/);assert.equal(status.url,undefined);assert.equal(status.code,undefined);assert.deepEqual(states.at(-1),status);assert.equal(engine.store.list('runs').length,0);
-  }finally{if(previous===undefined)delete process.env.AIROOM_ACP_HOME;else process.env.AIROOM_ACP_HOME=previous;await engine.close();await f.cleanup();}
+  }finally{finishCheck();if(previous===undefined)delete process.env.AIROOM_ACP_HOME;else process.env.AIROOM_ACP_HOME=previous;await engine.close();await f.cleanup();}
 });
 
 test('ZCode waits for the final JSON, emits one reply, and resumes the same native session',async()=>{

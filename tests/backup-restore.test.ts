@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { BackupRestorer, recoverInterruptedRestore } from '../src/backend/backup-restore';
 import { Store } from '../src/backend/store';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { BUILTIN_MEMBERS, DEFAULT_SETTINGS } from '../src/shared/defaults';
 import { fixtureBackup } from './support/backup-fixture';
 import type { Run, Session } from '../src/shared/types';

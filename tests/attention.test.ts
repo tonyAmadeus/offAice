@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { collectAttention } from '../src/backend/attention';
 import type { AttentionSummary } from '../src/shared/attention';
 import type { Adapter, AdapterContext, ProviderId, ProviderInfo, PushEvent, Run, Session } from '../src/shared/types';

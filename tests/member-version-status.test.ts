@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { observeProgram, observeVersion } from '../src/backend/compatibility';
 import { resolveCliEntry } from '../src/backend/adapters/common';
 import type { Adapter, AdapterResult, ProviderInfo, Run } from '../src/shared/types';

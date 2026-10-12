@@ -2,7 +2,7 @@ import '../../scripts/test-bootstrap.mjs';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {Engine} from '../../src/backend/engine';
+import {Engine} from './seeded-engine';
 import type {Adapter,AdapterContext,AdapterResult,ProviderId,PushEvent} from '../../src/shared/types';
 import type {RoundtableDetail} from '../../src/shared/roundtable';
 import {opinion,summary} from './joint-review-harness';

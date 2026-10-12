@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import type { Adapter, Run, Session, Project } from '../src/shared/types';
 
 for (const mode of ['accepted', 'unknown', 'unsupported'] as const) test(`run nudge ${mode}: one attempt, no extra run, other work preserved`, async () => {

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Store } from '../src/backend/store';
+import { Store } from './helpers/seeded-engine';
 import { RoomDiscussionController } from '../src/backend/room-discussion';
 import { chooseHandSpeaker, discussionCommand, nextDiscussionSpeaker, parseDiscussionReply, parseHandVote, waitAfterMeetingRound, type DiscussionReply, type HandVote, type RoomDiscussion } from '../src/shared/discussion';
 import { roomMarkdown } from '../src/shared/room';

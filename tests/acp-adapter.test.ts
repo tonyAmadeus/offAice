@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { acpDenial, resolveAcpProgram } from '../src/backend/adapters/acp';
 import { ACP_DEFAULT_PERMISSIONS, PROVIDER_NAMES, SECRET_PLACEHOLDER, normalizeExecutor, parseEnv, splitArgs, splitSecretEnv } from '../src/shared/defaults';
 import type { AcpExecutor, Approval, MemberProfile, Project, ProviderInfo, Run, Session, TimelineEvent } from '../src/shared/types';

@@ -2,7 +2,7 @@ import '../../scripts/test-bootstrap.mjs';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {Engine} from '../../src/backend/engine';
+import {Engine} from './seeded-engine';
 import type {Adapter,AdapterContext,AdapterResult,Project,Run} from '../../src/shared/types';
 import type {JointReviewDetail} from '../../src/shared/joint-review';
 import {plan} from './project-flow-harness';

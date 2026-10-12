@@ -2,7 +2,7 @@ import '../../scripts/test-bootstrap.mjs';
 import {mkdtemp,mkdir,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {Engine} from '../../src/backend/engine';
+import {Engine} from './seeded-engine';
 import type {Adapter,AdapterContext,ProviderId} from '../../src/shared/types';
 import {plan} from './project-flow-harness';
 

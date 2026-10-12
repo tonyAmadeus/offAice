@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { Store } from '../src/backend/store';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { migrateRoundReports, stageRoundReport, publishRoundReports } from '../src/backend/project-room-reports';
 import type { Round, ProjectFlow } from '../src/shared/project-flow';
 import type { Adapter, AdapterContext, Project, RoomId, RoomMessage, RoomState, Run, Session } from '../src/shared/types';

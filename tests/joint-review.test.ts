@@ -7,7 +7,7 @@ import {jointHarness,opinion,summary} from './helpers/joint-review-harness';
 import type {JointReviewDetail} from '../src/shared/joint-review';
 import type {ProjectFlowSnapshot,FlowArtifact} from '../src/shared/project-flow';
 import {workspaceFingerprint} from '../src/backend/workspace';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import {Store} from '../src/backend/store';
 import {quotaReport} from '../src/shared/quota';
 

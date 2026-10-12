@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,stat,rm,symlink} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import {Store} from '../src/backend/store';
 import {harness} from './helpers/project-flow-harness';
 import type {Adapter,AdapterContext,Project,Run,Session,MemberProfile,RoomMessage} from '../src/shared/types';

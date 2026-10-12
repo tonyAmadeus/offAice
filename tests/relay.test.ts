@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { applyWorkspace, prepareWorkspace, workspaceFingerprint } from '../src/backend/workspace';
 import { beginCheckpoint, finishCheckpoint, undoCheckpoint } from '../src/backend/workspace-checkpoint';
 import type { Adapter, AdapterContext, Collaboration, Project, Session, Run } from '../src/shared/types';

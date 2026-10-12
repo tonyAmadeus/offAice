@@ -5,7 +5,9 @@ const provider=process.env.CURSOR_CONFIG_DIR?'cursor':process.env.QODERCN_CONFIG
 if(!home)throw Error('isolated login home missing');
 const credentials=path.join(home,'fixture-auth'),args=process.argv.slice(2);
 if(process.env.FIXTURE_CALLS)appendFileSync(process.env.FIXTURE_CALLS,JSON.stringify({args,home,leaked:!!(process.env.CURSOR_API_KEY||process.env.CURSOR_AUTH_TOKEN||process.env.OPENAI_API_KEY||process.env.GEMINI_API_KEY||process.env.QODER_PERSONAL_ACCESS_TOKEN||process.env.QODERCN_PERSONAL_ACCESS_TOKEN||process.env.KIMI_API_KEY)})+'\n');
-if(args.join(' ')==='acp --login'||args.filter(arg=>arg!=='--disable-auto-update').join(' ')==='login'){
+if(args.filter(arg=>arg!=='--disable-auto-update').join(' ')==='logout'){
+  const {unlinkSync}=await import('node:fs');if(existsSync(credentials))unlinkSync(credentials);process.exit(0);
+}else if(args.join(' ')==='acp --login'||args.filter(arg=>arg!=='--disable-auto-update').join(' ')==='login'){
   process.stderr.write(provider==='cursor'?'Open https://cursor.com/loginDeepControl?fixture=1 in your browser.\n':provider==='kimi'?'Opening browser for Kimi device login: https://auth.kimi.com/verify?user_code=ABCD-1234\nenter code: ABCD-1234\n':'Open https://'+(provider==='qodercn'?'qoder.cn':'qoder.com')+'/cli/login?fixture=1 in your browser.\n');
   if(process.env.FIXTURE_WAIT==='1')setInterval(()=>{},1000);
   else{mkdirSync(home,{recursive:true});writeFileSync(credentials,'fixture');process.exit(0);}

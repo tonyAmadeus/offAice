@@ -22,11 +22,11 @@ for(const [relative,hash] of Object.entries(manifest.hashes)){
 }
 const dependencies=await verifyRuntimeDependencies(path.join(source,'resources','app'));
 const expectedRoot=new Set((await readdir(path.join(root,'node_modules','electron','dist'))).filter(name=>!['electron.exe','resources'].includes(name)));
-for(const name of ['AIROOM.exe','resources','build-manifest.json','使用说明.txt'])expectedRoot.add(name);
+for(const name of ['AIROOM.exe','resources','build-manifest.json','使用说明.txt','LICENSE.electron.txt'])expectedRoot.add(name);
 const guide=`AIROOM ${version} · Windows x64 免安装版\r\n\r\n`+
   '1. 完整解压本压缩包到一个文件夹，不要在压缩包内直接运行。\r\n'+
   '2. 双击 AIROOM.exe。无需安装 Node.js、npm 或开发工具。\r\n'+
-  '3. 首次使用，在“设置与连接”中下载需要的官方成员程序，并用自己的账号登录。下载和使用成员需要联网。\r\n'+
+  '3. 首次打开时人物卡和执行端连接为空；在“设置与连接”中下载或手动配置需要的程序，用自己的账号登录，再自行添加人物卡。下载和使用成员需要联网。\r\n'+
   '4. 关闭窗口会缩到托盘；需要彻底退出时，请在托盘菜单选择退出。\r\n\r\n'+
   '本包只包含程序和必要运行依赖，不包含开发者的账号、密钥、聊天记录、工作副本或测试数据。\r\n'+
   '聊天记录、人物配置和成员登录资料默认保存在 %USERPROFILE%\\.airoom\\data。\r\n'+

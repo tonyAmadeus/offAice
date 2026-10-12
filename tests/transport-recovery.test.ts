@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { JsonLineRpc } from "../src/backend/adapters/common";
-import { Engine } from "../src/backend/engine";
+import { Engine } from "./helpers/seeded-engine";
 import { RoomRuntimePool } from "../src/backend/runtime-pool";
 import type { Adapter } from "../src/shared/types";
 

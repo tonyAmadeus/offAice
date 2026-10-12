@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { Store } from '../src/backend/store';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { AutomationScheduler } from '../src/backend/automation-scheduler';
 import { localParts, nextOccurrence, validateSchedule, type TimedJob, type TimedOccurrence } from '../src/shared/automation';
 

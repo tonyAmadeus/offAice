@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import type { Adapter, AdapterResult, ProviderInfo, Run } from '../src/shared/types';
 
 const info=(available=false,auth:ProviderInfo['auth']='unknown'):ProviderInfo=>({id:'codex',name:'Codex',available,auth,detail:available?'connected':'workspace routing discovery failed',capabilities:{steer:true,cancel:'native',streaming:true,write:true,history:true}});

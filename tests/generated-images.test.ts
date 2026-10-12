@@ -5,7 +5,7 @@ import { mkdtemp, readFile, readdir, rm, copyFile, mkdir, writeFile, stat } from
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { Store } from '../src/backend/store';
 import { storeGeneratedImage, GENERATED_IMAGE_MAX_BYTES } from '../src/backend/generated-images';
 import { attachmentPath } from '../src/backend/attachments';

@@ -89,11 +89,11 @@ function memoryFields(source: Record<string, unknown>, existing?: MemberProfile)
   const entries = normalizeMemories(source.memories, source.memory, existing?.createdAt ?? new Date().toISOString());
   return entries ? { memories: entries, memory: activeMemoryText(entries) || undefined } : {};
 }
-/** Accept a card from the renderer: known fields only, sizes bounded, executor fixed after creation. */
+/** Accept a card from the renderer: known fields only, sizes bounded, artwork independent from the executor. */
 export function normalizeMember(value: unknown, existing?: MemberProfile, newId?: string): MemberProfile {
   const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const builtIn = BUILTIN_MEMBERS.find(member => member.id === (existing?.id ?? source.id));
-  const executor = builtIn?.executor ?? existing?.executor ?? (PERMISSION_MEMBERS.includes(source.executor as PermissionMember) || isAcpId(source.executor) ? source.executor as PermissionMember : undefined);
+  const executor = source.executor === undefined ? existing?.executor ?? builtIn?.executor : (PERMISSION_MEMBERS.includes(source.executor as PermissionMember) || isAcpId(source.executor) ? source.executor as PermissionMember : undefined);
   if (!executor) throw new Error('请选择这位成员使用的执行端');
   const name = bounded(source.name, 40) ?? existing?.name ?? builtIn?.name ?? '';
   if (!name) throw new Error('成员名称不能为空');
@@ -103,6 +103,7 @@ export function normalizeMember(value: unknown, existing?: MemberProfile, newId?
   const file = (input: unknown) => typeof input === 'string' && /^[a-f0-9-]{8,64}\.(png|jpe?g|webp|gif)$/i.test(input) ? input : undefined;
   return {
     id: existing?.id ?? builtIn?.id ?? newId ?? '', executor, name,
+    templateId: ['claude','codex','dsh'].includes(String(source.templateId)) ? source.templateId as 'claude'|'codex'|'dsh' : existing?.templateId,
     userTitle: bounded(source.userTitle, 40) || undefined, persona: bounded(source.persona, 8000) || undefined, ...memoryFields(source, existing), ...normalizeLife(source, existing?.id ?? builtIn?.id ?? newId ?? ''),
     talkativeness: source.talkativeness === 'quiet' || source.talkativeness === 'chatty' ? source.talkativeness : 'normal',
     motto: bounded(source.motto, 80) || undefined, color: typeof source.color === 'string' && /^#[0-9a-f]{6}$/i.test(source.color) ? source.color : undefined,

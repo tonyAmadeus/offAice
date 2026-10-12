@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { DshAdapter } from '../src/backend/adapters/dsh';
 import { DEFAULT_SETTINGS } from '../src/shared/defaults';
 import { quotaPreference } from '../src/shared/quota';

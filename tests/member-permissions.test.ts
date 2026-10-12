@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { memberPermissions, normalizeMemberPermissions } from '../src/shared/permissions';
 import { DEFAULT_SETTINGS, normalizePermissions, automaticWorkSettings } from '../src/shared/defaults';
 import { connectionLabel } from '../src/shared/executor-connection';

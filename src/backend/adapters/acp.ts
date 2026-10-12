@@ -258,7 +258,8 @@ export class AcpAdapter implements Adapter {
       const methods = this.authMethods();
       const method = methods.find(item => item.id === methodId) ?? methods[0];
       if (!method) throw new Error(`${this.name} 没有提供可以在 AIROOM 里发起的登录方式；请在它自己的命令行里登录后再检测。`);
-      await this.request('authenticate', { methodId: method.id }, 10 * 60 * 1000);
+      progress?.({phase:'waiting',message:'请在官方登录页面完成授权；未打开页面时可以取消后重试。'});
+      await this.request('authenticate', { methodId: method.id }, 5 * 60 * 1000);
       return { method: method.name };
     } finally { await this.cleanup(); }
   }

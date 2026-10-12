@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile, lstat } from 'node:fs/promises';
 import path from 'node:path';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { CATALOG_REVISION, EXECUTOR_CATALOG, catalogEntry, catalogProvider, type CatalogId } from '../src/shared/executor-catalog';
 import { catalogCandidate, managedCatalogEnvironment, assertCatalogVersionUnused } from '../src/backend/executor-catalog';
 import { DEFAULT_SETTINGS, isAcpId, normalizeExecutor } from '../src/shared/defaults';

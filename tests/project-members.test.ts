@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import {Store} from '../src/backend/store';
 import {createBackup} from '../src/backend/backup';
 import {BackupRestorer} from '../src/backend/backup-restore';

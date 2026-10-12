@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import type {Adapter,AdapterContext,ProviderId,Run} from '../src/shared/types';
 import {failureMessage} from '../src/backend/adapter-failure';
 async function until(check:()=>boolean){for(let i=0;i<600;i++){if(check())return;await new Promise(r=>setTimeout(r,10));}assert.fail('host selection did not settle');}

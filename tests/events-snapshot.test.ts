@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { Store } from '../src/backend/store';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import type { RoomMessage, Run, Session, TimelineEvent } from '../src/shared/types';
 
 const at = (n: number) => new Date(Date.UTC(2026, 9, 1) + n * 1000).toISOString();

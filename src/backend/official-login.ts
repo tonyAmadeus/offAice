@@ -6,6 +6,7 @@ import {
 } from "../shared/executor-catalog";
 import { spawnCli, type CliCommand } from "./adapters/common";
 import { waitForNpmOutput } from "./member-versions";
+import {stopOwned} from './process-supervisor';
 import {
   defaultBrowserLoginCommand,
   defaultBrowserLoginEnvironment,
@@ -94,15 +95,17 @@ export async function runOfficialExecutorLogin(
     args = [...args, "--no-browser"];
   const child = spawnCli(command, args, { cwd, env });
   register(child);
+  let preparationExpired=false;
+  const preparationTimer=setTimeout(()=>{preparationExpired=true;void stopOwned(child,1500).catch(()=>{});},30_000);
   for (const stream of [child.stdout, child.stderr]) {
-    const parser = officialExecutorLoginOutput(provider, (state) =>
-      progress?.(state),
-    );
+    const parser = officialExecutorLoginOutput(provider, (state) => {if(state.phase==='waiting')clearTimeout(preparationTimer);progress?.(state);});
     stream?.on("data", (chunk: Buffer) => parser.write(chunk));
     stream?.on("end", () => parser.end());
   }
   // Uses the same owned-process timeout/drain guarantees as managed downloads.
-  const result = await waitForNpmOutput(child, 9 * 60_000);
-  if (result.code !== 0)
-    throw new Error("官方登录没有完成，请重试登录或检查网络。");
+  try{
+    const result = await waitForNpmOutput(child, 5 * 60_000);
+    if(preparationExpired)throw new Error('官方授权页面在 30 秒内未准备好，请检查网络后重试。');
+    if(result.code!==0)throw new Error('官方登录没有完成，请重试登录或检查网络。');
+  }finally{clearTimeout(preparationTimer);}
 }

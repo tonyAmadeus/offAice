@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { Store } from '../src/backend/store';
 import { memberChatPrompt,openingPrompt,yesterdayFacts } from '../src/backend/daily-life';
 import { validateDailyLife } from '../src/shared/automation';

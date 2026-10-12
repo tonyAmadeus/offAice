@@ -335,7 +335,7 @@ export class MemberWorkspaces {
     if(p.replyTo){const replied=this.store.get<RoomMessage>('room_messages',String(p.replyTo));if(replied?.threadId!==thread.id)throw new Error('回复不属于当前话题');message.replyTo=replied.id;}
     if(room.kind==='desk'){
       const topic=this.store.get<DeskTopic>('desk_topics',thread.id)!;if(topic.memberId!==member.id)throw new Error('不能使用其他成员的话题');
-      const session=this.store.get<Session>('sessions',topic.sessionId);if(!session||session.provider!==member.executor)throw new Error('原执行端已不可用，记录保留；请新开话题');
+      const session=this.store.get<Session>('sessions',topic.sessionId);if(!session)throw new Error('原执行端已不可用，记录保留；请新开话题');
       const summary=!session.nativeId?(thread.summary?.text??thread.inherited?.text):undefined;
       const result=await this.host.send(session.id,summary?`此前的话题摘要（背景，不是新的要求）：\n${summary}\n\n用户这次的消息：\n${message.text}`:message.text,attachments) as {runId?:string};
       if(result.runId){this.store.nameRoomThread(thread.id,message.text);message.id=`desk-user-${result.runId}`;this.store.put('personal_run_inputs',result.runId,{messageId:message.id,text:message.text});this.putMessage({...message,at:this.store.get<Run>('runs',result.runId)!.createdAt});this.projected.delete(topic.id);}

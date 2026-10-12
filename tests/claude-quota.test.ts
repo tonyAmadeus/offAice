@@ -8,7 +8,7 @@ import { claudeAccountUsage } from '../src/backend/adapters/claude-quota';
 import { ClaudeAdapter } from '../src/backend/adapters/claude';
 import { DEFAULT_SETTINGS } from '../src/shared/defaults';
 import { mergeQuota,quotaReport,quotaPreference } from '../src/shared/quota';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import type { Adapter } from '../src/shared/types';
 
 const sample={rate_limits:{limits:[{kind:'session',percent:23,resets_at:'2026-10-04T20:00:00Z',severity:'normal',is_active:true},{kind:'weekly_all',percent:7,resets_at:'2026-10-10T20:00:00Z',severity:'normal',is_active:false}]}};

@@ -28,6 +28,12 @@ export function apply(ctx, config) {
     }catch{return unavailable;}
   };
   const run = async () => {
+    if(config.mode==='logout'){
+      await ctx.deepseekAccount.signOut(client);
+      const current=await ctx.deepseekAccount.getState();
+      const authenticated=current.status==='credential-stored';
+      emit({type:'status',authenticated,state:authenticated?'verification-failed':'signed-out'});exit(authenticated?2:0);return;
+    }
     const state = await ctx.deepseekAccount.getState();
     if (state.status === 'credential-stored') {
       // A local recheck after the verified probe, without another profile/balance network request.

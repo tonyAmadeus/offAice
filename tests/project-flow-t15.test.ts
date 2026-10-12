@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import {readFile,writeFile,unlink} from 'node:fs/promises';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import type {FlowArtifacts} from '../src/backend/project-flow-artifacts';
 import {FlowError,type PlanPayload,type ProjectFlowSnapshot} from '../src/shared/project-flow';
 import {harness,plan,passing,failed,proof} from './helpers/project-flow-harness';

@@ -12,7 +12,7 @@ import { DshAdapter } from '../src/backend/adapters/dsh';
 import { AcpAdapter } from '../src/backend/adapters/acp';
 import { DEFAULT_SETTINGS } from '../src/shared/defaults';
 import type { Adapter, AdapterContext, ProviderId, Run, Session } from '../src/shared/types';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { runtimeFingerprint } from '../src/backend/runtime-pool';
 import { acknowledgedNativeContext } from '../src/backend/native-context';
 

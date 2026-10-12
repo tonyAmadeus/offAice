@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { Store } from '../src/backend/store';
 import type { Adapter, AdapterContext, AdapterResult, Approval, Attachment, MemberProfile, Project, ProviderId, ProviderInfo, PushEvent, RoomMessage, RoomSummary, RoomThread, Run, Session, Settings } from '../src/shared/types';
 import { installVersion } from '../src/backend/member-versions';
@@ -707,13 +707,18 @@ test('deleting a custom member never reuses their private room session for the b
   } finally { await h.dispose(); }
 });
 
-test('an existing custom card keeps its executor, and session model choices override its card',async()=>{
+test('rebinding a card retains the original session executor and its explicit model choices',async()=>{
   const h=await harness({codex:{delivery:'confirmed',finish:{summary:'ok'}}});
   try {
     const member=await h.engine.invoke('team.save',{member:{executor:'codex',name:'审稿人',model:'card-model',effort:'high'}}) as MemberProfile;
-    const saved=await h.engine.invoke('team.save',{member:{...member,executor:'claude',name:'新名字'}}) as MemberProfile;
-    assert.equal(saved.executor,'codex','the executor cannot change once its native sessions exist');
     const session=h.engine.createSession(h.project.id,'codex','test',false,member.id);
+    h.engine.store.put('projects',h.project.id,{...h.project,memberConfigs:{[member.id]:{model:'project-model',effort:'high'}}});
+    const saved=await h.engine.invoke('team.save',{member:{...member,executor:'claude',name:'新名字'}}) as MemberProfile;
+    assert.equal(saved.executor,'claude');assert.equal(saved.model,undefined);assert.equal(saved.effort,undefined);
+    assert.equal(h.engine.store.get<Session>('sessions',session.id)?.model,'project-model');
+    assert.equal(h.engine.store.get<Project>('projects',h.project.id)?.memberConfigs?.[member.id],undefined);
+    h.engine.store.put('projects',h.project.id,{...h.project,memberConfigs:{[member.id]:{model:'new-claude-model',effort:'medium'}}});
+    assert.equal(h.engine.createSession(h.project.id,'codex','new binding',false,member.id).provider,'claude');
     await h.engine.invoke('session.update',{sessionId:session.id,model:'session-model',effort:'low'});
     const sent=await h.send(session.id);const adapter=await h.started(sent.runId);
     assert.equal(adapter.context!.settings.models.codex,'session-model');assert.equal(adapter.context!.settings.efforts.codex,'low');

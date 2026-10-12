@@ -1,4 +1,5 @@
 import { executeRun, type RunExecutionActive } from './run-execution';
+import {logoutProvider} from './provider-logout';
 import { discussionCallLimits } from "../shared/discussion-budget";
 import { memberPermissions, normalizeMemberPermissions } from "../shared/permissions";
 import { EngineBackups } from "./engine-backups";
@@ -309,6 +310,7 @@ export class Engine {
   private closing?: Promise<void>;
   private closed = false;
   private probeRevisions = new Map<ProviderId, number>();
+  private loginChecks = new Set<Promise<unknown>>();
   private probeRetries = new Map<ProviderId, NodeJS.Timeout>();
   private deferredProbeRetries = new Map<ProviderId, number>();
   private providerChecks = new Map<string, Promise<ProviderInfo>>();
@@ -2576,8 +2578,9 @@ export class Engine {
   }
   async probe(provider?: ProviderId, automaticRetry = false) {
     if (!this.alive || this.maintenance) return this.providers;
+    const empty=!this.store.members().length&&!this.store.executors().length&&!Object.values(this.settings.paths).some(Boolean)&&!this.key;
     await Promise.all(
-      (provider ? [provider] : this.executorIds()).map(async (id) => {
+      (provider ? [provider] : empty?[]:this.executorIds()).map(async (id) => {
         this.cancelProbeRetry(id);
         const revision = (this.probeRevisions.get(id) ?? 0) + 1;
         this.probeRevisions.set(id, revision);
@@ -3004,6 +3007,30 @@ export class Engine {
       case "provider.probe":
         await this.invalidateRuntimes(params.provider);
         return this.probe(params.provider);
+      case 'internal.provider.loginBegin': {
+        const id=String(params.provider);
+        if(!['claude','codex','dsh'].includes(id))throw new Error('执行端无效。');
+        if(this.active.size||this.memberOperations.has(id)||this.acpLogins.has(id))throw new Error('请先停止当前任务或等待下载完成，再登录。');
+        this.acpLogins.add(id);
+        try{await this.invalidateRuntimes(id as ProviderId,true);}catch(error){this.acpLogins.delete(id);throw error;}
+        return {started:true};
+      }
+      case 'internal.provider.loginEnd':
+        this.acpLogins.delete(String(params.provider));void this.schedule();return {ended:true};
+      case 'provider.logout': {
+        const id=String(params.provider) as ProviderId;
+        if(!this.executorIds().includes(id))throw new Error('执行端不存在。');
+        if(this.active.size||this.memberOperations.has(id)||this.acpLogins.has(id))throw new Error('请先停止当前任务、取消登录或等待下载完成，再登出。');
+        this.memberOperations.add(id);
+        try{
+          await this.invalidateRuntimes(id,true);
+          await logoutProvider(id,this.settings,buildEnvironment(this.settings),this.store.executors().find(item=>item.id===id));
+          this.providers=this.providers.map(info=>info.id===id?{...info,auth:'none' as const,available:false,stale:true,quota:undefined,detail:'已登出，请重新登录。'}:info);
+          this.store.delete('quotas',id);this.probeRevisions.set(id,(this.probeRevisions.get(id)??0)+1);
+          const info=this.providers.find(item=>item.id===id);if(info)this.store.put('providers',id,info);
+          this.executorLoginStates.delete(id);this.broadcast();return {loggedOut:true};
+        }finally{this.memberOperations.delete(id);void this.schedule();}
+      }
       case "provider.compatibility":
         return this.store
           .list<CompatibilityReport>("compatibility_reports")
@@ -3606,13 +3633,15 @@ export class Engine {
       case "member.stop":
         return this.stopMember(params);
       case "team.save": {
-        // A card for a built-in member keeps its id and executor; a new member gets its own id.
+        // A card keeps its identity; changing its executor only affects new contexts.
         const members = this.store.members();
         const given = params.member ?? {};
         const existing = given.id
           ? members.find((member) => member.id === given.id)
           : undefined;
-        if (given.id && !existing)
+        const addingTemplate=params.addTemplate===true&&BUILTIN_MEMBERS.some(member=>member.id===given.id)&&!this.store.get('removed_members',given.id);
+        if(params.addTemplate===true&&existing)throw new Error('这张模板人物卡已添加，请刷新后编辑已有人物。');
+        if (given.id && !existing && !addingTemplate)
           throw new Error("这位成员不存在，请刷新工作台");
         const card = normalizeMember(
           given,
@@ -3626,14 +3655,31 @@ export class Engine {
           throw new Error("请先保存这个 AI 程序的连接设置");
         if (!existing && members.length >= 16)
           throw new Error("团队最多 16 位成员");
-        this.memberWorkspaces.folder(card.id, true);
-        this.store.put("members", card.id, card);
-        this.memberWorkspaces.ensureMember(card.id);
+        if(existing && card.executor !== existing.executor) {
+          if(this.active.size)throw new Error('请先停止当前任务，再更换人物绑定的执行端。');
+          if(this.store.list<import('../shared/project-flow').ProjectFlow>('project_flows').some(flow=>flow.memberIds?.includes(card.id)&&!['completed','cancelled'].includes(flow.status)))throw new Error('请先结束项目流程，再更换人物绑定的执行端。');
+          card.model=undefined;card.effort=undefined;
+        }
         await this.roomRuntimes.invalidate(
           (key) =>
             (this.store.get<Session>("sessions", key)?.memberId ??
               this.store.get<Session>("sessions", key)?.provider) === card.id,
         );
+        if(existing&&card.executor!==existing.executor){
+          if(this.active.size||this.store.members().find(member=>member.id===card.id)?.executor!==existing.executor)throw new Error('成员任务或绑定已变化，请停止任务并刷新后重试。');
+          this.store.transaction(()=>{
+            for(const session of this.store.list<Session>('sessions').filter(session=>(session.memberId??session.provider)===card.id&&!session.flowId)){
+              const config=this.runConfiguration(session);
+              this.store.put('sessions',session.id,{...session,model:session.model??config.model,effort:session.effort??config.effort});
+            }
+            for(const project of this.store.list<Project>('projects').filter(project=>project.memberConfigs?.[card.id])){
+              const memberConfigs={...project.memberConfigs};delete memberConfigs[card.id];
+              this.store.put('projects',project.id,{...project,memberConfigs,memberConfigRevision:(project.memberConfigRevision??0)+1});
+            }
+            this.store.put('members',card.id,card);
+          });
+        }else this.store.put('members',card.id,card);
+        this.memberWorkspaces.folder(card.id,true);this.memberWorkspaces.ensureMember(card.id);
         this.broadcast();
         return card;
       }
@@ -3765,20 +3811,19 @@ export class Engine {
             });
           throw error;
         } finally {
-          if (this.alive) await this.probe(executor.id).catch(() => {});
+          const completed=this.executorLoginStates.get(executor.id);
           if (
             this.alive && authorized &&
             this.executorLoginStates.get(executor.id)?.phase !== "cancelled"
           ) {
-            const info = this.providers.find((item) => item.id === executor.id);
-            const state: CatalogLoginState = {
-              phase: "completed",
-              message: info?.available
-                ? "官方授权已完成，连接检查通过。"
-                : `官方授权已完成，连接检查未通过：${info?.detail || "请重新检查成员连接。"}`,
-            };
-            this.executorLoginStates.set(executor.id, state);
-            this.push({ type: "executor-login", id: executor.id, state });
+            const check=this.probe(executor.id).then(()=>{
+              if(!this.alive||this.executorLoginStates.get(executor.id)!==completed)return;
+              const info=this.providers.find(item=>item.id===executor.id);
+              const state:CatalogLoginState={phase:'completed',message:info?.available?'官方授权已完成，连接检查通过。':`官方授权已完成，连接检查未通过：${info?.detail||'请重新检查成员连接。'}`};
+              this.executorLoginStates.set(executor.id,state);this.push({type:'executor-login',id:executor.id,state});
+            }).catch(()=>{});
+            this.loginChecks.add(check);
+            void check.finally(()=>this.loginChecks.delete(check));
           }
           this.acpLogins.delete(executor.id);
           this.executorLoginAdapters.delete(executor.id);
@@ -3838,6 +3883,7 @@ export class Engine {
           portraitOffset,
           face,
           avatarFace,
+          templateId,
           builtIn,
         } = member;
         // Retain only attribution for history. Sessions, native IDs, outputs and shared executors stay intact.
@@ -3853,6 +3899,7 @@ export class Engine {
             portraitOffset,
             face,
             avatarFace,
+            templateId,
             builtIn,
           });
           this.store.delete("members", id);
@@ -3891,9 +3938,7 @@ export class Engine {
           .members()
           .find((item) => item.id === member.id);
         if (!current) throw new Error("这张人物卡已删除，请添加新成员");
-        if (current.cardHidden)
-          this.store.put("members", member.id, { ...member, cardHidden: true });
-        else this.store.delete("members", member.id);
+        this.store.put("members", member.id, { ...member, executor:current.executor, cardHidden:current.cardHidden });
         await this.roomRuntimes.invalidate(
           (key) =>
             (this.store.get<Session>("sessions", key)?.memberId ??
@@ -5864,11 +5909,12 @@ export class Engine {
     session: Pick<Session, "provider" | "memberId">,
   ): MemberProfile {
     const members = this.store.members();
+    const current=members.find(member=>member.id===(session.memberId??session.provider));
+    if(current)return current.executor===session.provider?current:{...current,executor:session.provider as MemberProfile['executor'],model:undefined,effort:undefined};
     return (
       members.find(
         (member) =>
-          member.id === (session.memberId ?? session.provider) &&
-          member.executor === session.provider,
+          member.id === (session.memberId ?? session.provider),
       ) ??
       this.store.get<MemberProfile>(
         "removed_members",
@@ -5918,8 +5964,9 @@ export class Engine {
           session.flowId,
         )?.memberConfigs?.[member.id]);
     if (frozen) return { ...frozen, capturedAt: now() };
+    const rebound=this.store.members().find(item=>item.id===member.id)?.executor!==session.provider;
     return requestedConfig(
-      project,
+      rebound?{...project,memberConfigs:undefined}:project,
       member,
       this.settings,
       session.flowId ? undefined : session,
@@ -5949,7 +5996,7 @@ export class Engine {
       id: randomUUID(),
       projectId,
       provider,
-      ...(member && !member.builtIn ? { memberId: member.id } : {}),
+      ...(member && (!member.builtIn || member.id !== provider) ? { memberId: member.id } : {}),
       title: title || `${member?.name ?? PROVIDER_NAMES[provider]} 对话`,
       ...(title ? {} : { autoTitle: true }),
       createdAt: now(),
@@ -7111,6 +7158,7 @@ export class Engine {
       await Promise.allSettled([...this.executions, ...this.flowTasks]);
       for (const key of [...this.buffers.keys()]) this.flush(key);
       await disposeOwned();
+      await Promise.allSettled([...this.loginChecks]);
       this.closed = true;
       this.store.close();
     })();

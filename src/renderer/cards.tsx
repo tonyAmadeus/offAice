@@ -4,7 +4,7 @@ import { ConfigurationHint, useProviderConfiguration } from './provider-configur
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Download, ImagePlus, LoaderCircle, Plus, RotateCcw, Save, Trash2, UserRound } from 'lucide-react';
-import { PORTRAIT_SCALE, PROVIDER_NAMES, isAcpId } from '../shared/defaults';
+import { BUILTIN_MEMBERS, PORTRAIT_SCALE, PROVIDER_NAMES, isAcpId } from '../shared/defaults';
 import type { AcpExecutor, MemberProfile, PermissionMember, Snapshot, UserProfile } from '../shared/types';
 import { Avatar, Portrait, UserAvatar, buildTeam, useTeam, type TeamMember } from './members';
 import { providerSummary, runnable, type Invoke, type Notify } from './ui';
@@ -139,7 +139,8 @@ export function CardEditor({ snapshot, memberId, invoke, notify, onBack, onCance
     let created: AcpExecutor | undefined;
     try {
       if (connecting) created = await invoke<AcpExecutor>('executor.save', { executor: { ...program, name: program.name.trim() || draft.name.trim() } });
-      await invoke('team.save', { member: { ...draft, id: existing?.id, ...(created ? { executor: created.id } : {}) } }, created ? `${draft.name} 已加入团队，正在检查 ${created.name} 的连接。` : `${draft.name || '成员'} 的人物卡已保存，下一轮对话生效。`);
+      const addingTemplate=!existing&&Boolean(draft.id&&draft.templateId===draft.id);
+      await invoke('team.save', { member: { ...draft, id: existing?.id??(addingTemplate?draft.id:undefined), ...(created ? { executor: created.id } : {}) },addTemplate:addingTemplate }, created ? `${draft.name} 已加入团队，正在检查 ${created.name} 的连接。` : `${draft.name || '成员'} 的人物卡已保存，下一轮对话生效。`);
       onBack();
     } catch {
       // Do not leave a connection behind for a member that was not created.
@@ -180,10 +181,11 @@ export function CardEditor({ snapshot, memberId, invoke, notify, onBack, onCance
         <small className="card-preview-note">{preview.art || draft.avatar ? '在立绘和头像上拖动调整位置，滚轮缩放（也可以用方向键和 +/-）。' : '上传立绘或头像后可以在这里调整。'}调整后点击底部“保存人物卡”。</small>
       </aside>
       <div className="card-fields">
+        {!existing&&<label className="field">人物形象模板<select aria-label="人物形象模板" value={draft.templateId??''} onChange={event=>{const template=BUILTIN_MEMBERS.find(item=>item.id===event.target.value);set({id:template&&!snapshot.members.some(item=>item.id===template.id)&&!snapshot.removedMembers?.some(item=>item.id===template.id)?template.id:'',templateId:template?.id as MemberProfile['templateId'],name:template?.name??draft.name,color:template?.color??draft.color,motto:template?.motto??draft.motto});}}><option value="">自定义人物</option>{BUILTIN_MEMBERS.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select><small>仅填入形象和名称，执行端由你选择。</small></label>}
         <div className="card-field-row">
           <label className="field">名字<input value={draft.name} maxLength={40} onChange={event => set({ name: event.target.value })} placeholder="例如：小雪" /></label>
-          {existing ? <label className="field">使用的程序<input value={`${PROVIDER_NAMES[draft.executor]} · ${connectionLabel(draft.executor, snapshot.executors?.find(item => item.id === draft.executor))}`} disabled />
-              <small>{isAcpId(draft.executor) ? '程序路径、登录和权限在“团队成员”页下方的连接设置里修改。' : '已创建的成员不能更换所用的程序。'}</small></label>
+          {existing ? <label className="field">使用的程序<select aria-label="使用的程序" value={draft.executor} onChange={event=>set({executor:event.target.value as PermissionMember,model:undefined,effort:undefined})}>{executors.map(id=><option key={id} value={id}>{PROVIDER_NAMES[id]} · {connectionLabel(id,snapshot.executors?.find(item=>item.id===id))}</option>)}</select>
+              <small>更换后新会话使用所选程序；已有会话保留原执行端和记录。</small></label>
             : <div className="field">使用的程序<div className="segmented" role="radiogroup" aria-label="程序来源">
                 <button type="button" role="radio" aria-checked={source === 'program'} className={source === 'program' ? 'selected' : ''} onClick={() => setSource('program')}>接入新的 AI 程序</button>
                 <button type="button" role="radio" aria-checked={source === 'existing'} className={source === 'existing' ? 'selected' : ''} onClick={() => setSource('existing')}>沿用已有的程序</button></div>
@@ -202,7 +204,7 @@ export function CardEditor({ snapshot, memberId, invoke, notify, onBack, onCance
           <small className="card-preview-note">图片会复制到 AIROOM 的数据目录，原文件不会被改动。支持 PNG、JPG、WebP、GIF，8 MB 以内。</small>
         </div>
         <div className="card-field-row">
-          <label className="field">怎么称呼你<input value={draft.userTitle ?? ''} maxLength={40} onChange={event => set({ userTitle: event.target.value })} placeholder={userName ? `留空就叫你「${userName}」` : '例如：老板、阿潘'} /></label>
+          <label className="field">怎么称呼你<input value={draft.userTitle ?? ''} maxLength={40} onChange={event => set({ userTitle: event.target.value })} placeholder={userName ? `留空就叫你「${userName}」` : '填写你希望使用的称呼'} /></label>
           <label className="field">一句话介绍<input value={draft.motto ?? ''} maxLength={80} onChange={event => set({ motto: event.target.value })} placeholder="会显示在团队卡片上" /></label>
         </div>
         <div className="field">代表色<div className="swatches">{SWATCHES.map(color => <button type="button" key={color} className={`swatch ${preview.color === color ? 'selected' : ''}`} style={{ background: color }} aria-label={`代表色 ${color}`} onClick={() => set({ color })} />)}<input type="color" value={preview.color} onChange={event => set({ color: event.target.value })} aria-label="自定义代表色" /></div></div>
@@ -251,7 +253,7 @@ export function ProfileSettings({ snapshot, invoke }: { snapshot: Snapshot; invo
     <div className="profile-card">
       <UserAvatar name={profile.name || '我'} avatar={profile.avatar} size={84} />
       <div className="profile-fields">
-        <label className="field">你的名字<input value={profile.name} maxLength={40} onChange={event => setProfile(previous => ({ ...previous, name: event.target.value }))} placeholder="例如：阿潘" /><small>显示在你的消息旁；没有单独设置称呼的成员会这样叫你。</small></label>
+        <label className="field">你的名字<input value={profile.name} maxLength={40} onChange={event => setProfile(previous => ({ ...previous, name: event.target.value }))} placeholder="填写你的昵称" /><small>显示在你的消息旁；没有单独设置称呼的成员会这样叫你。</small></label>
         <div className="card-image-actions"><button type="button" className="button small secondary" onClick={() => void pick()}><ImagePlus size={13} />{profile.avatar ? '更换头像' : '上传头像'}</button>{profile.avatar && <button type="button" className="button small quiet" onClick={() => setProfile(previous => ({ name: previous.name }))}>移除头像</button>}</div>
       </div>
     </div>

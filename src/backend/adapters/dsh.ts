@@ -252,7 +252,7 @@ export class DshAdapter implements Adapter {
   canReuse() { return this.reusable && !this.context && !!this.child?.stdin?.writable && this.child.exitCode === null && this.child.signalCode === null; }
   async dispose() { this.stopped = true; await this.cleanup(); }
 
-  async accountLaunch(settings:Settings,env:NodeJS.ProcessEnv,mode:'probe'|'login'|'auth'|'balance'|'state') {
+  async accountLaunch(settings:Settings,env:NodeJS.ProcessEnv,mode:'probe'|'login'|'auth'|'balance'|'state'|'logout') {
     const home=this.home(env);const file=await this.command(settings);
     const isolated=buildDshEnvironment(env,home,false);
     await mkdir(home,{recursive:true});

@@ -42,6 +42,17 @@ export class Store {
       CREATE INDEX IF NOT EXISTS room_thread_messages ON entities(COALESCE(json_extract(value,'$.threadId'),'room-main')) WHERE entity='room_messages';
       CREATE INDEX IF NOT EXISTS room_speaking_runs ON entities(json_extract(value,'$.runId')) WHERE entity='room_messages' AND json_extract(value,'$.status')='speaking';`);
     try{
+      // Older profiles implicitly contained the three templates. Materialize them once;
+      // a genuinely new profile starts empty and never recreates deleted cards.
+      if(!this.get('team_migrations','explicit-members-v1')) {
+        const legacy=this.db.prepare('SELECT 1 FROM entities LIMIT 1').get();
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+          if(legacy)for(const member of BUILTIN_MEMBERS)if(!this.get('members',member.id)&&!this.get('removed_members',member.id))this.put('members',member.id,member);
+          this.put('team_migrations','explicit-members-v1',{done:true});
+          this.db.exec('COMMIT');
+        }catch(error){this.db.exec('ROLLBACK');throw error;}
+      }
       this.migrateRoomHistory();this.roomsReady=true;
       for(const project of this.list<Project>('projects').filter(p=>!p.kind))this.ensureProjectRoom(project.id);
     }catch(error){this.db.close();throw error;}
@@ -266,15 +277,13 @@ export class Store {
       this.db.exec('COMMIT');
     } catch(error) { this.db.exec('ROLLBACK'); throw error; }
   }
-  /** Built-in members with any saved card applied, then the user's own members in the order they joined. */
+  /** Only explicitly added cards, in the order they joined. */
   members():MemberProfile[] {
     const saved=this.list<MemberProfile>('members');
-    const removed=new Set(this.list<MemberProfile>('removed_members').map(member=>member.id));
-    const builtIns=BUILTIN_MEMBERS.filter(member=>!removed.has(member.id)).map(member=>({...member,...saved.find(item=>item.id===member.id),id:member.id,executor:member.executor,builtIn:true}));
-    return [...builtIns,...saved.filter(item=>!BUILTIN_MEMBERS.some(member=>member.id===item.id)).sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''))];
+    return saved.sort((a,b)=>(a.createdAt??'').localeCompare(b.createdAt??''));
   }
   historicalMembers():MemberProfile[] {
-    return this.list<MemberProfile>('removed_members').map(({id,executor,name,color,portrait,avatar,portraitScale,portraitOffset,face,avatarFace,builtIn})=>({id,executor,name,color,portrait,avatar,portraitScale,portraitOffset,face,avatarFace,builtIn}));
+    return this.list<MemberProfile>('removed_members').map(({id,executor,name,color,portrait,avatar,portraitScale,portraitOffset,face,avatarFace,templateId,builtIn})=>({id,executor,name,color,portrait,avatar,portraitScale,portraitOffset,face,avatarFace,templateId,builtIn}));
   }
   /** Programs connected over ACP, in the order they were added. */
   executors():AcpExecutor[] { return this.list<AcpExecutor>('executors').sort((a,b)=>a.createdAt.localeCompare(b.createdAt)); }

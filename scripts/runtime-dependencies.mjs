@@ -44,6 +44,8 @@ export default async function afterPack(context) {
   const output = path.resolve(context.appOutDir);
   const expected = path.join(root, 'release', 'win-unpacked');
   if (output !== expected || context.electronPlatformName !== 'win32') throw new Error('Unexpected packaging target: ' + output);
+  // A custom Electron distribution also copies its demo app; ship only AIROOM.
+  await rm(path.join(expected, 'resources', 'default_app.asar'), {force:true});
   const appRoot = path.join(output, 'resources', 'app');
   const targetModules = path.join(appRoot, 'node_modules');
   // Validate the absolute deletion target before removing builder's incomplete tree.

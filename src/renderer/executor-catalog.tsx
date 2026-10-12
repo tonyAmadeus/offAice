@@ -90,6 +90,7 @@ export function CatalogLogin({executor,snapshot,invoke,notify}:{executor:AcpExec
     else await invoke('provider.probe',{provider:executor.id});
     notify(clear?'已清除密钥。':auth.kind==='api'?'密钥已加密保存。真实模型调用仍需验证。':'官方登录流程已结束，请核对连接状态。');
   }catch{}finally{setBusy(false);}}
+  async function logout(){setBusy(true);try{await invoke('provider.logout',{provider:executor.id});setLogin(undefined);notify('已登出此执行端，聊天记录保留。');}catch{}finally{setBusy(false);}}
   return <div className="catalog-login">
     <label className="field compact">登录方式<select aria-label="登录方式" value={authId} onChange={event=>{setAuthId(event.target.value);setKey('');if(entry.id==='opencode')setModel('');}} disabled={busy||loggingIn}>{entry.authentication.map(auth=><option key={auth.id} value={auth.id}>{auth.label}</option>)}</select></label>
     {auth.kind==='api'&&<>
@@ -103,6 +104,7 @@ export function CatalogLogin({executor,snapshot,invoke,notify}:{executor:AcpExec
       {entry.id==='qwen'&&<label className="field compact">API 服务地址<input aria-label="Qwen API 服务地址" value={baseUrl} onChange={event=>setBaseUrl(event.target.value)} placeholder="https://你的服务/v1"/></label>}
     </>}
     {auth.kind==='browser'&&auth.description&&<p className="provider-detail">{auth.description}</p>}
+    {auth.kind==='browser'&&<button type="button" className="button small quiet danger" disabled={busy||loggingIn||!snapshot.backendReady} onClick={()=>{if(window.confirm(`登出 ${entry.name} 在 AIROOM 中的账号？聊天记录会保留。`))void logout();}}>登出</button>}
     <div className="catalog-actions"><button className="button secondary" disabled={busy||loggingIn||!snapshot.backendReady||auth.kind==='api'&&!key&&!executor.secretKeys?.length} onClick={()=>void save()}>{busy?<LoaderCircle className="spin" size={13}/>:<KeyRound size={13}/>}{auth.kind==='api'?'保存密钥并检查':'官方浏览器登录'}</button>{auth.kind==='api'&&!!executor.secretKeys?.length&&<button className="button quiet danger" disabled={busy||loggingIn||!snapshot.backendReady} onClick={()=>void save(true)}>清除密钥</button>}</div>
     {entry.id==='opencode'&&<button className="button quiet" disabled={busy||loggingIn||!snapshot.backendReady||authId!==executor.authentication} onClick={()=>{setBusy(true);void invoke('provider.probe',{provider:executor.id}).then(()=>notify('模型清单已按当前提供方重新读取。')).catch(()=>{}).finally(()=>setBusy(false));}}><RefreshCw size={13}/>刷新模型清单</button>}
     {login&&<div className="provider-detail" role="status"><p>{login.message}</p>{login.code&&<p>授权码：<strong>{login.code}</strong></p>}{login.phase==='waiting'&&login.url&&<button className="button secondary" onClick={()=>void invoke('executor.openLogin',{id:executor.id}).catch(()=>{})}>打开官方授权页面</button>}{loggingIn&&<button className="button quiet" onClick={()=>void invoke('executor.cancelLogin',{id:executor.id}).catch(()=>{})}>取消登录</button>}</div>}

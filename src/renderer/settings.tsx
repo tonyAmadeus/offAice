@@ -1,4 +1,5 @@
 import { connectionLabel } from '../shared/executor-connection';
+import {ProviderLogin} from './provider-login';
 import { ModelPicker } from './model-picker';
 export { ModelPicker } from './model-picker';
 import { PermissionSettings } from './permission-settings';
@@ -56,6 +57,7 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
   // Requests that point at a program (its id, or the download catalog) belong to 连接与版本.
   const [tab, setTab] = useState<SettingsTab>(initialTab === 'members' && initialFocus && !initialEditing ? 'connections' : initialTab);
   const [newExecutor,setNewExecutor]=useState<PermissionMember>();
+  const [manualProvider,setManualProvider]=useState<ProviderId>();
   // Cancelling a card started from the download catalog returns to the catalog, not the gallery.
   const [editOrigin,setEditOrigin]=useState<SettingsTab>('members');
   const [nodeInfo,setNodeInfo]=useState<NodeRuntimeInfo>();
@@ -92,15 +94,6 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
   }
   async function save() { setBusy(true); try { await saveConfiguration(); notify('设置已保存。新任务会使用当前配置。'); onClose(); } catch {} finally { setBusy(false); } }
   async function probe(provider?: ProviderId) { setChecking(provider ?? 'all'); try { await saveConfiguration(); await invoke('provider.probe', provider ? { provider } : {}); } catch {} finally { setChecking(null); } }
-  async function login(provider: ProviderId) {
-    try {
-      await saveConfiguration();
-      const result = await invoke<{ message?: string; detail?: string; url?: string } | string>('provider.login', { provider });
-      const message = typeof result === 'string' ? result : [result?.message ?? result?.detail, result?.url].filter(Boolean).join('\n');
-      setLoginMessages(previous => ({ ...previous, [provider]: message || '已打开官方登录流程。登录完成后请重新检查。' }));
-      notify('官方登录流程已启动。登录后请重新检查。');
-    } catch {}
-  }
   async function exportDiagnostics() {
     try {
       const result = await invoke<{ path?: string } | string>('diagnostics.export');
@@ -127,17 +120,18 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
           <ExecutorCatalog snapshot={snapshot} invoke={invoke} notify={notify} beforeOperation={saveConfiguration} onSelected={item=>{if(!item.provider.startsWith('acp-'))setSettings(previous=>({...previous,paths:{...previous.paths,[item.provider]:item.selectedPath}}));}} onNewMember={provider=>{setNewExecutor(provider);setEditOrigin('connections');setEditing('new');setTab('members');}}/>
           <div className="settings-section-heading"><h3>连接、模型与版本</h3><button className="button small secondary" disabled={Boolean(checking) || !snapshot.backendReady} onClick={() => void probe()}><RefreshCw size={13} className={checking ? 'spin' : ''} />检查全部</button></div>
           <p className="settings-description">按程序设置，使用同一个程序的成员共用登录和版本。</p>
-          {PROVIDERS.map(provider => {
+          <label className="field compact">手动配置本机执行端<select aria-label="手动配置本机执行端" value={manualProvider??''} onChange={event=>setManualProvider(event.target.value as ProviderId||undefined)}><option value="">选择要配置的程序</option>{PROVIDERS.map(provider=><option key={provider} value={provider}>{PROVIDER_NAMES[provider]}</option>)}</select></label>
+          {PROVIDERS.filter(provider=>snapshot.settings.paths[provider]||team.members.some(member=>member.executor===provider)||manualProvider===provider||provider==='deepseek'&&snapshot.deepseekKeyConfigured).map(provider => {
             const info = snapshot.providers.find(item => item.id === provider);
-            const p = team.get(provider) ?? team.members[0];
+            const p = team.members.find(member=>member.executor===provider);
             return <section className={`provider-settings member-${provider}`} key={provider} data-provider={provider}>
               <div className="provider-settings-heading">
-                <Avatar member={p} size={42} mood={runnable(info) ? 'resting' : info ? 'offline' : 'away'} />
+                {p?<Avatar member={p} size={42} mood={runnable(info) ? 'resting' : info ? 'offline' : 'away'} />:<Cable size={24}/>}
                 <div><strong>{PROVIDER_NAMES[provider]} <small>{team.members.filter(member => member.executor === provider).map(member => member.name).join('、')}</small></strong><span className={runnable(info) ? 'ready-text' : ''}>{providerSummary(info)}{info?.version ? ` · ${versionText(info)}` : ''}</span></div>
                 <button className="button small quiet" disabled={Boolean(checking) || !snapshot.backendReady} onClick={() => void probe(provider)}>{checking === provider || checking === 'all' ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}检查</button>
-                {(provider === 'codex' || provider === 'claude'&&settings.claudeAuthMode!=='api' || provider === 'dsh') && <button className="button small secondary" disabled={!snapshot.backendReady} onClick={() => void login(provider)}><KeyRound size={12} />登录</button>}
               </div>
               <p className="provider-detail">{connectionLabel(provider)}</p><p className="provider-detail">{info?.detail ?? '尚未检查本机可用性与认证方式。'}</p>
+              {(provider==='codex'||provider==='dsh'||provider==='claude'&&settings.claudeAuthMode!=='api')&&<ProviderLogin provider={provider} available={snapshot.backendReady} invoke={invoke} notify={notify} beforeLogin={saveConfiguration}/>}
               <CompatibilityDetails provider={provider} info={info} available={snapshot.backendReady} load={provider=>invoke('provider.compatibility',{provider})}/>
               {loginMessages[provider] && <pre className="login-message">{loginMessages[provider]}</pre>}
               {provider !== 'deepseek' && <label className="field compact">执行文件路径 <span className="optional">留空自动查找</span><input value={settings.paths[provider] ?? ''} onChange={event => setSettings(previous => ({ ...previous, paths: { ...previous.paths, [provider]: event.target.value } }))} placeholder={info?.path ?? (provider === 'claude' ? '独立安装的 Claude Code CLI 路径' : '使用本机默认路径')} spellCheck={false} /></label>}

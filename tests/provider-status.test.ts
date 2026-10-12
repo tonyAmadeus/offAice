@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,rm} from 'node:fs/promises';
 import path from 'node:path';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import type {Adapter,AdapterContext,ProviderId,ProviderInfo,Run} from '../src/shared/types';
 const cache=path.resolve('.test-cache');
 function info(id:ProviderId):ProviderInfo{return {id,name:id,available:true,auth:'subscription',detail:'fixture',capabilities:{steer:false,cancel:'process',streaming:true,write:true,history:true}};}

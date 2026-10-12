@@ -133,9 +133,11 @@ export interface MemoryEntry {
   /** Kept on the card but not sent to the member. */
   off?: boolean;
 }
-/** A teammate: a character on top of one executor. Built-ins use the executor id as their id. */
+/** A teammate has a stable identity and independently selectable artwork and executor. */
 export interface MemberProfile {
   id: string; executor: PermissionMember; name: string;
+  /** Optional shipped artwork; independent of the selected executor. */
+  templateId?: 'claude'|'codex'|'dsh';
   /** How this member addresses the user; empty means the user's own name. */
   userTitle?: string;
   /** Personality, voice and role; injected into the member's system instructions every turn. */

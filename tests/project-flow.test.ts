@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { validatePlan, validateReview, parseReply } from '../src/shared/project-flow-protocol';
 import type { Adapter, AdapterContext, Project } from '../src/shared/types';
 import type { PlanPayload, ProjectFlowSnapshot, ReviewPayload } from '../src/shared/project-flow';

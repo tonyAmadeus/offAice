@@ -52,6 +52,7 @@ export function AcpConnection({ executor, info, snapshot, invoke, notify, settin
       <div><strong>{executor.name} <em className="acp-badge">{connectionLabel(executor.id, executor)}</em> <small>{users.map(member => member.name).join('、') || '还没有成员使用'}</small></strong><span className={ready ? 'ready-text' : ''}>{providerSummary(info)}{info?.version ? ` · ${info.version}` : ''}</span></div>
       <button type="button" className="button small quiet" disabled={Boolean(busy) || !snapshot.backendReady} onClick={() => void check()}>{busy === 'check' ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}检查</button>
       {!executor.catalogId&&<button type="button" className="button small secondary" disabled={Boolean(busy) || !snapshot.backendReady} onClick={() => void login()}>{busy === 'login' ? <LoaderCircle size={12} className="spin" /> : <KeyRound size={12} />}{busy === 'login' ? '等待登录完成…' : '登录'}</button>}
+      {!executor.catalogId&&busy==='login'&&<button type="button" className="button small quiet" onClick={()=>void invoke('executor.cancelLogin',{id:executor.id}).catch(()=>{})}>取消登录</button>}
       <button type="button" className="button small quiet" aria-expanded={editing} onClick={() => setEditing(value => !value)}><Pencil size={12} />{editing ? '收起' : '设置'}</button>
     </div>
     <p className="provider-detail">{info?.detail ?? '尚未检查。'}</p>

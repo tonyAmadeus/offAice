@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {access,mkdir,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import type {Project,RoomThread,Run,Session} from '../src/shared/types';
 import type {RoundtableDetail} from '../src/shared/roundtable';
 import type {ProjectFlowSnapshot} from '../src/shared/project-flow';

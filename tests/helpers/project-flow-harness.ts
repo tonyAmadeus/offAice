@@ -2,7 +2,7 @@ import '../../scripts/test-bootstrap.mjs';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {Engine} from '../../src/backend/engine';
+import {Engine} from './seeded-engine';
 import type {Adapter,AdapterContext,Project} from '../../src/shared/types';
 import type {PlanPayload,ReviewPayload,ReviewLevel,ProjectFlowSnapshot,Decision} from '../../src/shared/project-flow';
 

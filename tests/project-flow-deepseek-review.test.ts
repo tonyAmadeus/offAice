@@ -2,7 +2,7 @@ import '../scripts/test-bootstrap.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import {Store} from '../src/backend/store';
 import type {FlowOperation,ProjectFlowSnapshot,Round,Task} from '../src/shared/project-flow';
 import {parseReply} from '../src/shared/project-flow-protocol';

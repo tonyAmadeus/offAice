@@ -17,12 +17,13 @@ import { DshAdapter } from '../backend/adapters/dsh';
 import { createInterface } from 'node:readline';
 import { spawnOwned, stopOwned, type Ownership } from '../backend/process-supervisor';
 import { DEFAULT_SETTINGS, SECRET_PLACEHOLDER, isAcpId, isSecretName, parseEnv, splitSecretEnv } from '../shared/defaults';
-import type { AcpExecutor, Snapshot, Settings } from '../shared/types';
+import type { AcpExecutor, ProviderInfo, Snapshot, Settings } from '../shared/types';
 import { assertNormalIntegrity } from './integrity';
 import { loginOutput, submitClaudeLoginCode } from './login-output';
 import {officialExecutorLoginUrl} from '../backend/official-login';
 import {LoginBrowserGate} from './login-browser';
 import {codexBrowserLogin} from './codex-login';
+import {ProviderLoginState} from './provider-login-state';
 import { rpcTimeout,rpcTimeoutMessage } from './rpc-timeouts';
 import {BackendReadiness} from './backend-readiness';
 import { isAttachmentId, safeAttachmentName } from '../shared/attachments';
@@ -108,6 +109,7 @@ let restoring=false,quitAfterRestore=false;
 const guardians = new Map<number, Ownership>();
 const loginChildren = new Map<string, import('node:child_process').ChildProcess>();
 const loginStarting = new Set<string>();
+const providerLoginState=new ProviderLoginState(provider=>{const child=loginChildren.get(provider);if(child)void stopOwned(child,1500);});
 const loginBrowserGate=new LoginBrowserGate();
 const pending = new Map<number, { resolve: (value: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout;method:string;startedAt:number }>();
 const push = (event: unknown) => { if (window && !window.isDestroyed()) window.webContents.send('airoom:event', event); };
@@ -142,6 +144,7 @@ async function emergencyStop() {
   loginBrowserGate.clear();
   // Keep a human stop durable even if the worker cannot receive its control message.
   try { mkdirSync(dataDirectory,{recursive:true});writeFileSync(path.join(dataDirectory,AUTOMATION_PAUSE_FILE),'paused',{flag:'wx'}); } catch(error) { if((error as NodeJS.ErrnoException).code!=='EEXIST')try{appendFileSync(path.join(dataDirectory,'launch-stop.log'),`Automatic pause marker failed: ${String(error)}\n`);}catch{/* Stopping still takes precedence. */} }
+  for(const provider of new Set([...loginStarting,...loginChildren.keys()]))providerLoginState.cancel(provider);
   await Promise.allSettled([...loginChildren.values()].map(child => stopOwned(child, 2000)));
   loginChildren.clear();
   if (ready) {
@@ -315,41 +318,62 @@ async function waitRestoreWorkerExit(target:UtilityProcess|undefined,timeout:num
 async function login(provider: string) {
   const generation=backendGeneration;
   backendReadiness.assertReady(generation);
-  if(ready&&['codex','claude','dsh'].includes(provider))await request('internal.provider.invalidate',{provider});
   if (!['codex', 'claude', 'dsh'].includes(provider)) throw new Error('DeepSeek API 请使用设置中的密钥入口');
-  if (loginChildren.has(provider)||loginStarting.has(provider)) return { detail: '登录正在进行，请在已打开的浏览器完成后检测状态' };
+  if (loginChildren.has(provider)||loginStarting.has(provider)||providerLoginState.active(provider)) return { detail: '登录正在进行，请完成或取消当前登录。' };
   const settings = lastSnapshot?.settings || DEFAULT_SETTINGS;
+  const token=providerLoginState.begin(provider);
   loginStarting.add(provider);
-  const launch = await (async()=>{try{return provider==='dsh' ? await new DshAdapter().accountLaunch(settings,buildEnvironment(settings),'login') : (provider === 'codex' ? getCodexBrowserLoginLaunch : getClaudeLoginLaunch)(settings, buildEnvironment(settings));}finally{loginStarting.delete(provider);}})();
+  // Return immediately so the window can show progress and cancellation while discovery runs.
+  void (async()=>{let loginHeld=false;try{
+  await request('internal.provider.loginBegin',{provider});
+  loginHeld=true;
+  if(!providerLoginState.active(provider))return;
+  const launch = provider==='dsh' ? await new DshAdapter().accountLaunch(settings,buildEnvironment(settings),'login') : (provider === 'codex' ? getCodexBrowserLoginLaunch : getClaudeLoginLaunch)(settings, buildEnvironment(settings));
   backendReadiness.assertReady(generation);
+  if(!providerLoginState.active(provider))return;
   const child = spawnOwned(launch.command, launch.args, { cwd: 'cwd' in launch ? String(launch.cwd) : root, env: launch.env }); loginChildren.set(provider, child);
+  loginStarting.delete(provider);
   let opened = false;
-  let loginSucceeded=provider!=='codex';
-  const open = (url:string) => { if(!opened){opened=true;void shell.openExternal(url).catch(()=>push({type:'backend',ready,message:'官方登录页面未能打开，请重试登录。'}));} };
-  const show = (text:string) => push({type:'backend',ready,message:`${provider} 登录：${text}`});
+  let loginSucceeded=false;
+  const open = (url:string) => { if(!opened&&providerLoginState.update(provider,token,{phase:'waiting',message:'请在浏览器完成授权，也可以重新打开授权页或取消。',url})){opened=true;void shell.openExternal(url).catch(()=>push({type:'backend',ready,message:'官方登录页面未能打开，请点击“打开官方授权页面”重试。'}));} };
+  const show = (text:string) => {if(/报告登录完成/.test(text))loginSucceeded=true;push({type:'backend',ready,message:`${provider} 登录：${text}`});};
   if(provider==='codex'){
     child.stderr?.resume();
-    void codexBrowserLogin(child,open).then(()=>{loginSucceeded=true;}).catch(()=>{loginSucceeded=false;show('官方授权尚未完成，请在设置中重新发起。');}).finally(()=>void stopOwned(child,1500));
+    void codexBrowserLogin(child,open,5*60_000).then(()=>{loginSucceeded=true;}).catch(()=>{loginSucceeded=false;show('官方授权尚未完成，请在设置中重新发起。');}).finally(()=>void stopOwned(child,1500));
   }else if(provider==='dsh'){
     const lines=createInterface({input:child.stdout!});
     lines.on('line',line=>{
       if(!line.startsWith('AIROOM_DSH_ACCOUNT '))return;
       try{
         const value=JSON.parse(line.slice(19));
-        if(value.type==='login-url'&&!opened){const url=new URL(value.url);if(url.origin==='https://platform.deepseek.com'&&url.pathname==='/dsh/authorize'&&!url.username&&!url.password){opened=true;void shell.openExternal(url.href);}}
+        if(value.type==='login-url'&&!opened){const url=new URL(value.url);if(url.origin==='https://platform.deepseek.com'&&url.pathname==='/dsh/authorize'&&!url.username&&!url.password)open(url.href);}
         else if(value.type==='phase')push({type:'backend',ready,message:`DSH 独立登录：${value.phase}${value.code?'（'+value.code+'）':''}`});
-        else if(value.type==='status')push({type:'backend',ready,message:value.authenticated?'DSH 独立账号已登录':'DSH 登录状态：'+value.state});
+        else if(value.type==='status'){loginSucceeded=value.authenticated===true;push({type:'backend',ready,message:value.authenticated?'DSH 独立账号已登录':'DSH 登录状态：'+value.state});}
       }catch{push({type:'backend',ready,message:'DSH 登录组件返回无效状态'});}
     });
     child.stderr?.resume();child.once('close',()=>lines.close());
   }else{for(const stream of [child.stdout,child.stderr]){const output=loginOutput(provider,open,show);stream?.on('data',(chunk:Buffer)=>output.write(chunk));stream?.on('end',()=>output.end());}}
-  child.on('error', error => push({ type: 'backend', ready, message: `登录启动失败：${redact(error.message)}` }));
-  child.once('close', code => { loginChildren.delete(provider);const success=provider==='codex'?loginSucceeded:code===0;push({ type: 'backend', ready, message: success ? '官方登录已结束，正在重新检测账号状态' : '官方登录没有完成，可在设置中重试' }); if (ready) void request('provider.probe', { provider }).catch(() => {}); });
-  setTimeout(() => { if (loginChildren.get(provider) === child) void stopOwned(child, 2000).finally(() => loginChildren.delete(provider)); }, 10 * 60 * 1000).unref();
-  return { started: true, detail: '已启动官方账号登录，请在浏览器完成。AIROOM 不接收你的账号密码。' };
+  child.on('error',()=>providerLoginState.update(provider,token,{phase:'failed',message:'官方登录程序启动失败，请检查程序路径。'}));
+  child.once('close',code=>{
+    if(loginChildren.get(provider)!==child)return;
+    loginChildren.delete(provider);
+    const completed=loginSucceeded&&(provider==='codex'||code===0);
+    const accepted=providerLoginState.update(provider,token,{phase:completed?'completed':'failed',message:completed?'官方程序报告登录完成，正在检查连接。':'官方登录没有完成，可以重新登录。'});
+    if(ready)void request('internal.provider.loginEnd',{provider}).then(async()=>{
+      if(!accepted||!completed)return;
+      const infos=await request('provider.probe',{provider}) as ProviderInfo[];
+      const info=infos.find(item=>item.id===provider);
+      providerLoginState.checked(provider,token,info?.available?'官方授权已完成，连接检查通过。':`官方授权已完成，连接检查未通过：${info?.detail||'请重新检测连接。'}`);
+    }).catch(()=>providerLoginState.checked(provider,token,'官方授权已完成，连接检查未完成，请重新检测连接。'));
+  });
+  }catch(error){providerLoginState.update(provider,token,{phase:'failed',message:`登录启动失败：${redact(error instanceof Error?error.message:String(error))}`});}
+  finally{if(!loginChildren.has(provider)){loginStarting.delete(provider);if(loginHeld&&ready)void request('internal.provider.loginEnd',{provider}).catch(()=>{});}}
+  })();
+  return { started: true, detail: '正在准备官方登录，可在下方查看进度或取消。' };
 }
 const methods = new Set(['snapshot', 'backend.restart', 'provider.probe', 'network.check', 'settings.save', 'project.create', 'project.openPath', 'session.create', 'session.send', 'session.events', 'session.approvals', 'session.update', 'session.delete', 'project.update', 'project.remove', 'workspace.apply', 'workspace.discard', 'workspace.undo', 'workspace.undo.info', 'window.attention', 'window.show', 'file.save', 'asset.import', 'team.save', 'member.stop.preview', 'member.stop', 'team.delete', 'team.reset', 'profile.save', 'persona.import', 'projectRoom.ensure', 'room.get', 'room.send', 'room.stop', 'room.pause', 'room.resume', 'room.host', 'room.react', 'room.handoff', 'run.review', 'run.verdict', 'room.compress', 'room.rename', 'room.clear', 'room.uninherit', 'memory.sources', 'memory.read', 'memory.accept', 'memory.dismiss', 'attachment.pick', 'attachment.import', 'attachment.reveal', 'room.archive', 'room.delete', 'room.history', 'room.export', 'member.versions', 'member.install', 'member.use', 'member.remove', 'run.stop', 'run.nudge', 'all.stop', 'approval.answer', 'artifact.list', 'artifact.read', 'artifact.open', 'workspace.open', 'project.diff', 'run.validate', 'collaboration.start', 'collaboration.pause', 'collaboration.resume', 'diagnostics.export', 'dialog.directory', 'provider.login', 'provider.loginCode', 'provider.tokenLogin', 'secret.set', 'executor.save', 'executor.delete', 'executor.authenticate', 'dialog.program', 'renderer.error']);
 for(const method of ['executor.loginStatus','executor.openLogin','executor.cancelLogin'])methods.add(method);
+for(const method of ['provider.loginStatus','provider.openLogin','provider.cancelLogin','provider.logout'])methods.add(method);
 for(const method of [...ROUNDTABLE_READS,...ROUNDTABLE_WRITES])methods.add(method);
 for(const method of AUTOMATION_RPC_METHODS)methods.add(method);
 methods.add('provider.config');methods.add('provider.compatibility');methods.add('member.installation');
@@ -428,6 +452,25 @@ function registerIpc() {
     }
     if (method === 'dialog.directory') { const result = await dialog.showOpenDialog(window!, { properties: ['openDirectory'], title: '选择项目目录' }); return result.canceled ? null : result.filePaths[0]; }
     if (method === 'provider.login') return login(params?.provider);
+    if(method==='provider.loginStatus')return providerLoginState.get(String(params?.provider));
+    if(method==='provider.openLogin'){
+      const state=providerLoginState.get(String(params?.provider));
+      if(state?.phase!=='waiting'||!state.url)throw new Error('官方授权链接尚未准备好或已过期，请重新登录。');
+      await shell.openExternal(state.url);return {opened:true};
+    }
+    if(method==='provider.cancelLogin'){
+      const provider=String(params?.provider);providerLoginState.cancel(provider);
+      const child=loginChildren.get(provider);if(child)await stopOwned(child,1500);
+      else if(!loginStarting.has(provider)&&ready)await request('internal.provider.loginEnd',{provider});
+      return {cancelled:true};
+    }
+    if(method==='provider.logout'){
+      const provider=String(params?.provider);
+      if(loginChildren.has(provider)||loginStarting.has(provider))throw new Error('请先取消当前登录，再登出。');
+      const result=await request('provider.logout',{provider},90_000);
+      if(provider==='claude'){rmSync(claudeTokenFile(),{force:true});await request('internal.claudeToken',{value:undefined});}
+      providerLoginState.clear(provider);return result;
+    }
     if (method === 'provider.loginCode') {
       if(params?.provider!=='claude')throw new Error('该成员不使用授权码输入');
       await submitClaudeLoginCode(loginChildren.get('claude'),params?.code);return {submitted:true};

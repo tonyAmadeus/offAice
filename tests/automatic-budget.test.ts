@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { Engine } from '../src/backend/engine';
+import { Engine } from './helpers/seeded-engine';
 import { Store } from '../src/backend/store';
 import { AutomaticBudget } from '../src/backend/automatic-budget';
 import { AUTOMATION_PAUSE_FILE } from '../src/shared/automation';

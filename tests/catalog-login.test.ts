@@ -5,7 +5,7 @@ import path from 'node:path';
 import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {AcpAdapter} from '../src/backend/adapters/acp';
-import {Engine} from '../src/backend/engine';
+import {Engine} from './helpers/seeded-engine';
 import {catalogCandidate,catalogAuthentication,managedCatalogEnvironment} from '../src/backend/executor-catalog';
 import {EXECUTOR_CATALOG,catalogEntry,type CatalogLoginState} from '../src/shared/executor-catalog';
 import {officialExecutorLoginOutput,officialExecutorLoginUrl} from '../src/backend/official-login';
