@@ -1,0 +1,25 @@
+{
+  "name": "airoom-promo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AIROOM 0.1 发布 PV（Remotion + SVG）",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render AiroomPV out/airoom-pv.mp4",
+    "still": "remotion still AiroomPV out/still.png",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.529",
+    "@remotion/media-utils": "4.0.529",
+    "@remotion/transitions": "^4.0.529",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.529"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}
