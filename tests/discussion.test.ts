@@ -161,7 +161,7 @@ test('unanswered questions, fabricated targets and ordinary prose cannot fake cl
       if(i===0)return {body:'还有一个问题。',questions:[{to:'codex',text:'是否验证？'}]};
       return {action:'propose',body:'直接结束。'};
     });try{await h.input('守护收尾',{maxCalls:4});await h.finish();assert.notEqual(h.state().phase,'idle',mode);
-      if(mode==='prose'||mode==='accept'){assert.equal(h.state().phase,'budget');assert.equal(h.calls.length,4);assert.ok(h.messages().some(m=>m.status==='failed'&&m.text.includes('这次没能回答')));}
+      if(mode==='prose'||mode==='accept'){assert.equal(h.state().phase,'budget');assert.equal(h.calls.length,4);assert.ok(h.messages().some(m=>m.status==='failed'&&m.text.includes('本次回复失败')));}
       if(mode==='question'){assert.equal(h.state().questions.filter(q=>!q.answeredBy).length,1);assert.equal(h.state().proposal,undefined);assert.ok(h.warnings.some(w=>w.includes('发言保留')));}
       if(mode==='target')assert.ok(h.warnings.some(w=>w.includes('顺序')));
       assert.ok(h.messages().every(m=>!m.text.includes('"action"')));}finally{await h.dispose();}
@@ -202,7 +202,7 @@ test('a human end cannot acknowledge an unknown delivery implicitly or replay it
 
 test('budget pauses preserve pending seats and invalid replies remain bounded without closing a meeting',async()=>{
   const h=await fixture((_c,i)=>({body:'新增观点 '+i}));try{await h.input('预算测试',{maxCalls:2});await h.finish();assert.equal(h.state().phase,'budget');assert.equal(h.calls.length,2);h.controller.resume({maxCalls:2});await h.finish();assert.equal(h.calls.length,3);assert.equal(h.state().phase,'waiting_user');}finally{await h.dispose();}
-  const silent=await fixture(()=>({action:'pass',body:''}));try{await silent.input('无补充',{maxCalls:0});await silent.finish();assert.equal(silent.state().phase,'blocked');assert.equal(silent.calls.length,6);assert.equal(silent.messages().filter(m=>m.status==='failed'&&m.text.includes('这次没能回答')).length,3);assert.equal(silent.state().endedAt,undefined);}finally{await silent.dispose();}
+  const silent=await fixture(()=>({action:'pass',body:''}));try{await silent.input('无补充',{maxCalls:0});await silent.finish();assert.equal(silent.state().phase,'blocked');assert.equal(silent.calls.length,6);assert.equal(silent.messages().filter(m=>m.status==='failed'&&m.text.includes('本次回复失败')).length,3);assert.equal(silent.state().endedAt,undefined);}finally{await silent.dispose();}
 });
 
 test('unknown delivery skips only that member across rounds and needs acknowledgment before rejoining',async()=>{
@@ -414,7 +414,7 @@ test('a known malformed reply gets exactly one budgeted correction in the same t
     assert.equal(h.messages().filter(m=>m.author!=='user'&&m.text&&m.kind!=='summary').length,3);assert.ok(h.warnings.some(w=>w.includes('唯一一次补正')));
   }finally{await h.dispose();}
   const failed=await fixture(()=> '还是纯文本');
-  try{await failed.input('补正失败继续其他成员',{maxCalls:6});await failed.finish();assert.equal(failed.calls.length,6);assert.equal(failed.state().phase,'blocked');assert.equal(failed.messages().filter(m=>m.status==='failed'&&m.text.includes('这次没能回答')).length,3);assert.ok(failed.messages().every(m=>!m.text.includes('纯文本')));}finally{await failed.dispose();}
+  try{await failed.input('补正失败继续其他成员',{maxCalls:6});await failed.finish();assert.equal(failed.calls.length,6);assert.equal(failed.state().phase,'blocked');assert.equal(failed.messages().filter(m=>m.status==='failed'&&m.text.includes('本次回复失败')).length,3);assert.ok(failed.messages().every(m=>!m.text.includes('纯文本')));}finally{await failed.dispose();}
 });
 
 test('correction respects remaining budget and never repairs a mismatched turn or closure proposal',async()=>{

@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { chromium, expect } from '@playwright/test';
 import { createServer } from '../../scripts/ui-test-server.mjs';
-import { Engine } from '../../src/backend/engine.ts';
+import { Engine } from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 
 const directory=await mkdtemp(path.join(os.tmpdir(),'AIROOM automation-ui-'));
 const output=path.resolve('.test-cache/ui-automation');await mkdir(output,{recursive:true});

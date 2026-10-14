@@ -23,13 +23,38 @@ test('Gemini and Qwen disappear from downloads while legacy configuration remain
   try{for(const id of ['gemini','qwen']as const){assert.equal(catalogEntry(id).downloadable,false);const executor=catalogCandidate(id,agent);engine.store.put('executors',executor.id,executor);await assert.rejects(engine.invoke('catalog.install',{id,version:'1.0.0',agree:true}),/下载清单移除/);assert.deepEqual(engine.store.get('executors',executor.id),executor);}assert.equal(engine.store.list('runs').length,0);}
   finally{await engine.close();await clean(dir);}
 });
-test('Kimi, Qoder and Cursor run native login before ACP authentication in the same isolated home',async()=>{
+test('Kimi and Qoder use native login while Cursor authorizes directly over ACP in the same isolated home',async()=>{
   const dir=await fixture();try{for(const id of ['kimi','qoder','qodercn','cursor']as const){const calls=path.join(dir,id+'.jsonl'),command=id==='cursor'?(await cursorPackage(path.join(dir,'cursor-package'),'2026.10.01-e373342',{script:await readFile(agent,'utf8'),host:true})).entry:agent,executor=catalogCandidate(id,command),adapter=new AcpAdapter(executor),states:CatalogLoginState[]=[];
     const env={...process.env,AIROOM_ACP_HOME:path.join(dir,'homes'),FIXTURE_CALLS:calls,OPENAI_API_KEY:'must-not-inherit',GEMINI_API_KEY:'must-not-inherit',QODER_PERSONAL_ACCESS_TOKEN:'must-not-inherit',QODERCN_PERSONAL_ACCESS_TOKEN:'must-not-inherit',CURSOR_API_KEY:'must-not-inherit',CURSOR_AUTH_TOKEN:'must-not-inherit'};
     assert.equal((await adapter.probe(DEFAULT_SETTINGS,env)).auth,'none');
     await adapter.authenticate(env,executor.authentication,state=>states.push(state));assert.ok(states.some(state=>state.phase==='waiting'&&state.url));assert.equal((await adapter.probe(DEFAULT_SETTINGS,env)).available,true);
-    const packets=(await readFile(calls,'utf8')).trim().split('\n').map(line=>JSON.parse(line));assert.ok(packets.some(p=>p.args.join(' ')===(id==='kimi'?'acp --login':id==='cursor'?'--disable-auto-update login':'login')));assert.equal(new Set(packets.map(p=>p.home)).size,1);assert.ok(packets.every(p=>!p.leaked));
+    const packets=(await readFile(calls,'utf8')).trim().split('\n').map(line=>JSON.parse(line)),launches=packets.filter(p=>p.args);
+    if(id==='cursor'){
+      assert.ok(launches.every(p=>!p.args.includes('login')));
+      assert.equal(packets.filter(p=>p.method==='authenticate'&&p.methodId==='cursor_login').length,1);
+      assert.equal(states.at(-1)?.phase,'checking');assert.equal(states.at(-1)?.url,undefined);
+    }else assert.ok(launches.some(p=>p.args.join(' ')===(id==='kimi'?'acp --login':'login')));
+    assert.equal(new Set(launches.map(p=>p.home)).size,1);assert.ok(launches.every(p=>!p.leaked));assert.ok(packets.every(p=>p.method!=='session/prompt'));
   }}finally{await clean(dir);}
+});
+
+test('Cursor authorization finishes before a slow session check and can be cancelled while waiting for the browser',async()=>{
+  const dir=await fixture(),old=process.env.AIROOM_ACP_HOME;process.env.AIROOM_ACP_HOME=path.join(dir,'homes');
+  let releaseCheck!:()=>void;const checkGate=new Promise<void>(resolve=>releaseCheck=resolve);let checking=false;
+  const engine=new Engine(path.join(dir,'engine'),()=>{},()=>{},id=>({probe:async()=>{checking=true;await checkGate;return {id,name:'Cursor',available:true,runtimeReady:true,auth:'account',detail:'connected',capabilities:{steer:false,cancel:'native',streaming:true,write:true,history:true}};},start:async()=>assert.fail('login must not prompt a model'),stop:async()=>{}}));
+  try{
+    const command=(await cursorPackage(path.join(dir,'cursor-package'),'2026.10.01-e373342',{script:await readFile(agent,'utf8'),host:true})).entry,executor=catalogCandidate('cursor',command);
+    executor.env.FIXTURE_SESSION_WAIT='1';engine.store.put('executors',executor.id,executor);
+    await engine.invoke('executor.authenticate',{id:executor.id});assert.ok(checking);
+    assert.equal((await engine.invoke('executor.loginStatus',{id:executor.id}) as CatalogLoginState).phase,'completed');
+    releaseCheck();for(let i=0;i<100;i++){if((await engine.invoke('executor.loginStatus',{id:executor.id}) as CatalogLoginState).message.includes('检查通过'))break;await new Promise(resolve=>setTimeout(resolve,20));}
+    assert.match((await engine.invoke('executor.loginStatus',{id:executor.id}) as CatalogLoginState).message,/检查通过/);
+    const adapter=new AcpAdapter({...executor,id:`${executor.id}-cancel`,env:{FIXTURE_WAIT:'1'}}),states:CatalogLoginState[]=[];
+    const pending=adapter.authenticate({...process.env,AIROOM_ACP_HOME:process.env.AIROOM_ACP_HOME},undefined,state=>states.push(state));const rejected=assert.rejects(pending);
+    try{for(let i=0;i<200&&!states.some(state=>state.url);i++)await new Promise(resolve=>setTimeout(resolve,20));assert.ok(states.some(state=>state.url));}
+    finally{await adapter.stop();await rejected;}
+    assert.ok(!states.some(state=>state.phase==='checking'));assert.equal(engine.store.list('runs').length,0);
+  }finally{releaseCheck();await engine.close();if(old===undefined)delete process.env.AIROOM_ACP_HOME;else process.env.AIROOM_ACP_HOME=old;await clean(dir);}
 });
 test('pending official login can be cancelled and blocks replacing credentials',async()=>{
   const dir=await fixture(),engine=new Engine(dir,()=>{},()=>{}),old=process.env.AIROOM_ACP_HOME;process.env.AIROOM_ACP_HOME=path.join(dir,'homes');
@@ -42,6 +67,18 @@ test('pending official login can be cancelled and blocks replacing credentials',
     assert.deepEqual(await engine.invoke('executor.cancelLogin',{id:executor.id}),{cancelled:true});await rejected;
     const final=await engine.invoke('executor.loginStatus',{id:executor.id}) as CatalogLoginState;assert.equal(final.phase,'cancelled');assert.equal(final.url,undefined);assert.equal(final.code,undefined);assert.equal(engine.store.list('runs').length,0);
   }finally{if(old===undefined)delete process.env.AIROOM_ACP_HOME;else process.env.AIROOM_ACP_HOME=old;await engine.close();await clean(dir);}
+});
+
+test('Cursor rejected authorization clears waiting without checking or dispatching a model',async()=>{
+  const dir=await fixture(),old=process.env.AIROOM_ACP_HOME;process.env.AIROOM_ACP_HOME=path.join(dir,'homes');let checks=0;
+  const engine=new Engine(path.join(dir,'engine'),()=>{},()=>{},()=>({probe:async()=>{checks++;assert.fail('failed authorization must not probe');},start:async()=>assert.fail('login must not prompt a model'),stop:async()=>{}}));
+  try{
+    const command=(await cursorPackage(path.join(dir,'cursor-package'),'2026.10.01-e373342',{script:await readFile(agent,'utf8'),host:true})).entry,executor=catalogCandidate('cursor',command);
+    executor.env.FIXTURE_AUTH_FAIL='1';engine.store.put('executors',executor.id,executor);
+    await assert.rejects(engine.invoke('executor.authenticate',{id:executor.id}),/Login failed/);
+    const status=await engine.invoke('executor.loginStatus',{id:executor.id}) as CatalogLoginState;
+    assert.equal(status.phase,'failed');assert.equal(status.url,undefined);assert.equal(status.code,undefined);assert.equal(checks,0);assert.equal(engine.store.list('runs').length,0);
+  }finally{await engine.close();if(old===undefined)delete process.env.AIROOM_ACP_HOME;else process.env.AIROOM_ACP_HOME=old;await clean(dir);}
 });
 test('official login parser accepts split UTF-8 and allowlisted HTTPS links without exposing logs or secrets',()=>{
   const states:CatalogLoginState[]=[],parser=officialExecutorLoginOutput('kimi',state=>states.push(state));

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { Run, Snapshot } from '../shared/types';
+import type { RunSummary, Snapshot } from '../shared/types';
 import type { Invoke } from './ui';
 
 /** A reminder only: time passing never cancels or resends work. */
 export function RunProgress({ run, invoke, label = '当前阶段', canNudge = false, thresholdSeconds = 180 }: {
-  run: Run; invoke: Invoke; label?: string; canNudge?: boolean; thresholdSeconds?: number;
+  run: Pick<RunSummary, 'id' | 'status' | 'createdAt'>; invoke: Invoke; label?: string; canNudge?: boolean; thresholdSeconds?: number;
 }) {
   const [clock, setClock] = useState(Date.now), [remindAt, setRemindAt] = useState(0);
   const [busy, setBusy] = useState(false), [delivery, setDelivery] = useState(''), [error, setError] = useState('');

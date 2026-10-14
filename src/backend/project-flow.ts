@@ -2,6 +2,8 @@ import { executeFlowTask } from "./project-flow-task-execution";
 import { FlowValidation } from "./project-flow-validation";
 import { ProjectFlowView } from "./project-flow-view";
 import { payloadObject } from "../shared/project-flow-protocol";
+import { AMBIGUOUS_FIELDS, retainCommandProvenance } from "../shared/flow-format";
+import { recordFormatCorrection } from "./format-corrections";
 import { RoundResultReader } from "./round-results";
 import { ProjectWorkbench } from "./project-workbench";
 import { ProjectProgress } from "./project-progress";
@@ -99,6 +101,61 @@ import { bindSourceEvidence } from "./source-evidence";
 import { parseCompletionCriteria } from "../shared/project-flow-protocol";
 import { bindFlowEvidence, eventCommand } from "./project-flow-evidence";
 import { roundActivityMaterial } from "./project-flow-activity";
+/** The answer shape shown to a reviewer: nothing counts as verified until the reviewer checks it. */
+function reviewTemplate(
+  criteria: string[],
+  description: string,
+  result: string,
+  previous?: { id: string }[],
+  eventIds = true,
+) {
+  return {
+    verdict: "inconclusive",
+    verificationComplete: false,
+    criteriaResults: criteria.map((criterion) => ({
+      criterion,
+      verified: false,
+      evidence: "",
+    })),
+    ...(previous
+      ? {
+          previousFindingChecks: previous.map((f) => ({
+            findingId: f.id,
+            resolved: false,
+            evidence: "",
+          })),
+        }
+      : {}),
+    findings: [],
+    evidence: [
+      {
+        kind: "inspection",
+        description,
+        result,
+        ...(eventIds ? { eventIds: [] } : {}),
+      },
+    ],
+  };
+}
+/** The verdict fields every review record keeps, in their stored order. */
+function reviewOutcome<
+  P extends {
+    verdict: unknown;
+    criteriaResults: unknown;
+    assessments?: unknown;
+    strengths?: unknown;
+  },
+  A extends { outcome: unknown; reasons: unknown },
+>(payload: P, assessment: A) {
+  return {
+    verdict: payload.verdict as P["verdict"],
+    outcome: assessment.outcome as A["outcome"],
+    outcomeReasons: assessment.reasons as A["reasons"],
+    criteriaResults: payload.criteriaResults as P["criteriaResults"],
+    assessments: payload.assessments as P["assessments"],
+    strengths: payload.strengths as P["strengths"],
+  };
+}
 import {
   reviewLevel,
   roundReviewLevel,
@@ -716,6 +773,64 @@ export class ProjectFlowController {
       ["PAUSED", "QUOTA_BLOCKED"].includes(error.code)
     );
   }
+  /** A disposable copy of a version and a read-only review session that works only inside it. */
+  private async openReviewCopy(
+    flow: { id: string; projectId: string },
+    root: string,
+    fingerprint: string | undefined,
+    memberId: string,
+    title: string,
+  ): Promise<{ disposable: FlowArtifact; session: Session }>;
+  /** `keep` is checked again once the copy exists; a stale review removes the copy and opens nothing. */
+  private async openReviewCopy(
+    flow: { id: string; projectId: string },
+    root: string,
+    fingerprint: string | undefined,
+    memberId: string,
+    title: string,
+    keep: () => boolean,
+  ): Promise<{ disposable: FlowArtifact; session: Session } | undefined>;
+  private async openReviewCopy(
+    flow: { id: string; projectId: string },
+    root: string,
+    fingerprint: string | undefined,
+    memberId: string,
+    title: string,
+    keep?: () => boolean,
+  ) {
+    const disposable = await this.artifacts.capture(
+        flow,
+        root,
+        "review",
+        undefined,
+        fingerprint,
+        true,
+      ),
+      session = this.host.session(flow.projectId, memberId, title, true);
+    if (keep && !keep()) {
+      await this.artifacts.remove(disposable);
+      return;
+    }
+    this.store.put("sessions", session.id, {
+      ...session,
+      workspace: disposable.root,
+      workspaceKind: "original",
+      purpose: "flow-review",
+      flowId: flow.id,
+    });
+    this.store.put("flow_artifacts", disposable.id, {
+      ...disposable,
+      sessionId: session.id,
+    });
+    return { disposable, session };
+  }
+  /** A review copy stays only while its run's outcome is unknown, so that run can still be checked. */
+  private async releaseReviewCopy(operationId: string, disposableId: string) {
+    const current = this.need<FlowOperation>("flow_operations", operationId),
+      runId = current.correctionRunId ?? current.runId;
+    if (!runId || this.store.get<Run>("runs", runId)?.status !== "unknown")
+      await this.artifacts.remove(this.artifacts.get(disposableId));
+  }
   private failOperation(op: FlowOperation, error: unknown) {
     const current = this.need<FlowOperation>("flow_operations", op.id);
     if (
@@ -900,12 +1015,26 @@ export class ProjectFlowController {
           runId: result.runId,
         };
       } catch (error) {
+        const correction = {
+          area: "project-flow" as const,
+          stage: kind,
+          memberId: member.memberId,
+          executor: member.provider,
+          operationId: op.id,
+          runId: result.runId,
+          error,
+        };
         if (
           (error instanceof FlowError &&
-            error.code === "REQUIREMENTS_CHANGED") ||
+            (error.code === "REQUIREMENTS_CHANGED" ||
+              // A correction may not choose between the member's own conflicting fields.
+              error.code === AMBIGUOUS_FIELDS)) ||
           this.supersededOperation(op)
-        )
+        ) {
+          if (error instanceof FlowError && error.code === AMBIGUOUS_FIELDS)
+            recordFormatCorrection(this.store, { ...correction, outcome: "skipped" });
           throw error;
+        }
         if (
           !this.host.alive() ||
           this.flow(op.flowId).dispatchMode !== "running" ||
@@ -919,6 +1048,7 @@ export class ProjectFlowController {
           member.writeMode && member.workspace
             ? await workspaceFingerprint(member.workspace)
             : undefined;
+        try {
         result = await this.host.run(
           op.sessionId!,
           `仅补正上轮 JSON 格式，不再执行文件任务，不运行命令、不改文件。仅整理已有输出，不能新增验证声明。命令依据改成 inspection 时，保持 evidence 条数和顺序，原 result（包括句末标点）必须完整保留为前缀；可以在末尾补充原输出已有的信息（例如已有退出码），不能新增检查、改写原文或把未核实说成已核实。用途 ${kind}。错误：${(error as Error).message}\n原输出：${result.text.slice(0, FLOW_LIMITS.replyBytes)}\n${prompt.split("\n任务材料：")[0]}`,
@@ -935,7 +1065,7 @@ export class ProjectFlowController {
             "格式补正改变了文件内容，已停止后续派发。",
           );
         await this.checkRequirements(op);
-        const corrected = parseReply(result.text, kind);
+        const corrected = retainCommandProvenance(original, parseReply(result.text, kind));
         if (
           [
             "review",
@@ -946,10 +1076,13 @@ export class ProjectFlowController {
           ].includes(kind)
         )
           assertReviewMeaning(original, corrected);
-        return {
-          payload: validate(corrected, result.runId),
-          runId: result.runId,
-        };
+        const payload = validate(corrected, result.runId);
+        recordFormatCorrection(this.store, { ...correction, outcome: "corrected" });
+        return { payload, runId: result.runId };
+        } catch (failure) {
+          recordFormatCorrection(this.store, { ...correction, outcome: "failed" });
+          throw failure;
+        }
       }
     } catch (error) {
       if (error instanceof FlowError && error.code === "REQUIREMENTS_CHANGED") {
@@ -3971,32 +4104,14 @@ export class ProjectFlowController {
         !this.quotaAllows(flow, task, lead, "adjudication"))
     )
       return;
-    const artifact = this.artifacts.get(submission.version.artifactId),
-      disposable = await this.artifacts.capture(
-        flow,
-        artifact.root,
-        "review",
-        undefined,
-        artifact.fingerprint,
-        true,
-      ),
-      session = this.host.session(
-        flow.projectId,
-        lead,
-        "裁定复核异议 " + task.title,
-        true,
-      );
-    this.store.put("sessions", session.id, {
-      ...session,
-      workspace: disposable.root,
-      workspaceKind: "original",
-      purpose: "flow-review",
-      flowId: flow.id,
-    });
-    this.store.put("flow_artifacts", disposable.id, {
-      ...disposable,
-      sessionId: session.id,
-    });
+    const artifact = this.artifacts.get(submission.version.artifactId);
+    const { disposable, session } = await this.openReviewCopy(
+      flow,
+      artifact.root,
+      artifact.fingerprint,
+      lead,
+      "裁定复核异议 " + task.title,
+    );
     const op = this.operation(
       flow,
       "adjudication",
@@ -4053,10 +4168,7 @@ export class ProjectFlowController {
       this.failOperation(op, error);
       throw error;
     } finally {
-      const current = this.need<FlowOperation>("flow_operations", op.id),
-        runId = current.correctionRunId ?? current.runId;
-      if (!runId || this.store.get<Run>("runs", runId)?.status !== "unknown")
-        await this.artifacts.remove(this.artifacts.get(disposable.id));
+      await this.releaseReviewCopy(op.id, disposable.id);
     }
   }
   private resolveDisputes(
@@ -4226,7 +4338,7 @@ export class ProjectFlowController {
             "report",
             "nextRoundRecommendation",
           ],
-          fields,
+          [],
         ),
         { report, nextRoundRecommendation, ...review } = p,
         payload = this.checkedReview(op, criteria, previous)(review, runId),
@@ -4293,35 +4405,16 @@ export class ProjectFlowController {
       submission.version.fingerprint
     )
       throw new FlowError("STALE_VERSION", "作者成果在提交后改变。");
-    const disposable = await this.artifacts.capture(
-        flow,
-        this.artifacts.get(submission.version.artifactId).root,
-        "review",
-        undefined,
-        submission.version.fingerprint,
-        true,
-      ),
-      session = this.host.session(
-        flow.projectId,
-        task.reviewerMemberId,
-        "复核 " + task.title,
-        true,
-      );
-    if (!this.reviewCurrent(task.id, submission)) {
-      await this.artifacts.remove(disposable);
-      return;
-    }
-    this.store.put("sessions", session.id, {
-      ...session,
-      workspace: disposable.root,
-      workspaceKind: "original",
-      purpose: "flow-review",
-      flowId: flow.id,
-    });
-    this.store.put("flow_artifacts", disposable.id, {
-      ...disposable,
-      sessionId: session.id,
-    });
+    const opened = await this.openReviewCopy(
+      flow,
+      this.artifacts.get(submission.version.artifactId).root,
+      submission.version.fingerprint,
+      task.reviewerMemberId,
+      "复核 " + task.title,
+      () => this.reviewCurrent(task.id, submission),
+    );
+    if (!opened) return;
+    const { disposable, session } = opened;
     const previous = this.previousTaskFindings(task),
       criteria = memberCriteria(
         task.completionCriteria,
@@ -4357,29 +4450,7 @@ export class ProjectFlowController {
         "review",
         flowPrompt(
           "review",
-          {
-            verdict: "inconclusive",
-            verificationComplete: false,
-            criteriaResults: criteria.required.map((criterion) => ({
-              criterion,
-              verified: false,
-              evidence: "",
-            })),
-            previousFindingChecks: previous.map((f) => ({
-              findingId: f.id,
-              resolved: false,
-              evidence: "",
-            })),
-            findings: [],
-            evidence: [
-              {
-                kind: "inspection",
-                description: "实际检查",
-                result: "结果",
-                eventIds: [],
-              },
-            ],
-          },
+          reviewTemplate(criteria.required, "实际检查", "结果", previous),
           {
             task: { ...task, completionCriteria: criteria.required },
             userReviewRequest: this.userReviewRequest(
@@ -4943,31 +5014,13 @@ export class ProjectFlowController {
       (await workspaceFingerprint(artifact.root)) !== check.version.fingerprint
     )
       throw new FlowError("STALE_VERSION", "你要求检查的成品版本已改变。");
-    const disposable = await this.artifacts.capture(
-        flow,
-        artifact.root,
-        "review",
-        undefined,
-        artifact.fingerprint,
-        true,
-      ),
-      session = this.host.session(
-        flow.projectId,
-        check.memberId,
-        "用户要求的整轮检查 " + round.title,
-        true,
-      );
-    this.store.put("sessions", session.id, {
-      ...session,
-      workspace: disposable.root,
-      workspaceKind: "original",
-      purpose: "flow-review",
-      flowId: flow.id,
-    });
-    this.store.put("flow_artifacts", disposable.id, {
-      ...disposable,
-      sessionId: session.id,
-    });
+    const { disposable, session } = await this.openReviewCopy(
+      flow,
+      artifact.root,
+      artifact.fingerprint,
+      check.memberId,
+      "用户要求的整轮检查 " + round.title,
+    );
     const op = this.operation(flow, "requested-check", check, session.id);
     this.update("flow_requested_checks", check, { status: "running" });
     try {
@@ -4979,23 +5032,7 @@ export class ProjectFlowController {
         "requested-check",
         flowPrompt(
           "requested-check",
-          {
-            verdict: "inconclusive",
-            verificationComplete: false,
-            criteriaResults: split.required.map((criterion) => ({
-              criterion,
-              verified: false,
-              evidence: "",
-            })),
-            findings: [],
-            evidence: [
-              {
-                kind: "inspection",
-                description: "检查整轮成品",
-                result: "实际检查结果",
-              },
-            ],
-          },
+          reviewTemplate(split.required, "检查整轮成品", "实际检查结果", undefined, false),
           {
             round,
             executionActivity: roundActivityMaterial(this.store, round),
@@ -5035,12 +5072,7 @@ export class ProjectFlowController {
         this.update("flow_requested_checks", check, {
           status: "completed",
           runId: result.runId,
-          verdict: result.payload.verdict,
-          outcome: assessment.outcome,
-          outcomeReasons: assessment.reasons,
-          criteriaResults: result.payload.criteriaResults,
-          assessments: result.payload.assessments,
-          strengths: result.payload.strengths,
+          ...reviewOutcome(result.payload, assessment),
           findings: assessment.findings.map((f) => ({
             ...f,
             id: randomUUID(),
@@ -5063,10 +5095,7 @@ export class ProjectFlowController {
       });
       throw error;
     } finally {
-      const current = this.need<FlowOperation>("flow_operations", op.id),
-        runId = current.correctionRunId ?? current.runId;
-      if (!runId || this.store.get<Run>("runs", runId)?.status !== "unknown")
-        await this.artifacts.remove(this.artifacts.get(disposable.id));
+      await this.releaseReviewCopy(op.id, disposable.id);
     }
   }
   private async checkIntegratedRound(
@@ -5130,27 +5159,7 @@ export class ProjectFlowController {
         flowPrompt(
           "integration-check",
           {
-            verdict: "inconclusive",
-            verificationComplete: false,
-            criteriaResults: criteria.map((criterion) => ({
-              criterion,
-              verified: false,
-              evidence: "",
-            })),
-            previousFindingChecks: previous.map((f) => ({
-              findingId: f.id,
-              resolved: false,
-              evidence: "",
-            })),
-            findings: [],
-            evidence: [
-              {
-                kind: "inspection",
-                description: "整合检查",
-                result: "结果",
-                eventIds: [],
-              },
-            ],
+            ...reviewTemplate(criteria, "整合检查", "结果", previous),
             report: {
               summary: "本轮结论",
               completedTaskKeys: tasks.map((t) => t.key),
@@ -5231,12 +5240,7 @@ export class ProjectFlowController {
         id: f.previousFindingId ?? randomUUID(),
       }));
       Object.assign(integration, {
-        verdict: result.payload.verdict,
-        outcome: assessment.outcome,
-        outcomeReasons: assessment.reasons,
-        criteriaResults: result.payload.criteriaResults,
-        assessments: result.payload.assessments,
-        strengths: result.payload.strengths,
+        ...reviewOutcome(result.payload, assessment),
         verificationComplete: result.payload.verificationComplete,
         deferredUserCriteria: split.deferred,
         previousFindingChecks: result.payload.previousFindingChecks,
@@ -5431,31 +5435,13 @@ export class ProjectFlowController {
       integration.version?.fingerprint
     )
       throw new FlowError("STALE_VERSION", "整轮复核前版本已改变。");
-    const disposable = await this.artifacts.capture(
-        flow,
-        candidate.root,
-        "review",
-        undefined,
-        candidate.fingerprint,
-        true,
-      ),
-      session = this.host.session(
-        flow.projectId,
-        memberId,
-        "整轮复核 " + round.title,
-        true,
-      );
-    this.store.put("sessions", session.id, {
-      ...session,
-      workspace: disposable.root,
-      workspaceKind: "original",
-      purpose: "flow-review",
-      flowId: flow.id,
-    });
-    this.store.put("flow_artifacts", disposable.id, {
-      ...disposable,
-      sessionId: session.id,
-    });
+    const { disposable, session } = await this.openReviewCopy(
+      flow,
+      candidate.root,
+      candidate.fingerprint,
+      memberId,
+      "整轮复核 " + round.title,
+    );
     this.update("flow_rounds", round, { peerReviewerMemberId: memberId });
     const op = this.operation(flow, "peer-review", integration, session.id);
     try {
@@ -5468,29 +5454,7 @@ export class ProjectFlowController {
           "peer-review",
           flowPrompt(
             "peer-review",
-            {
-              verdict: "inconclusive",
-              verificationComplete: false,
-              criteriaResults: split.required.map((criterion) => ({
-                criterion,
-                verified: false,
-                evidence: "",
-              })),
-              previousFindingChecks: previous.map((f) => ({
-                findingId: f.id,
-                resolved: false,
-                evidence: "",
-              })),
-              findings: [],
-              evidence: [
-                {
-                  kind: "inspection",
-                  description: "整轮成果检查",
-                  result: "实际结果",
-                  eventIds: [],
-                },
-              ],
-            },
+            reviewTemplate(split.required, "整轮成果检查", "实际结果", previous),
             {
               round,
               userReviewRequest: this.userReviewRequest(
@@ -5539,12 +5503,7 @@ export class ProjectFlowController {
         peerReview = {
           memberId,
           runId: result.runId,
-          verdict: result.payload.verdict,
-          outcome: assessment.outcome,
-          outcomeReasons: assessment.reasons,
-          criteriaResults: result.payload.criteriaResults,
-          assessments: result.payload.assessments,
-          strengths: result.payload.strengths,
+          ...reviewOutcome(result.payload, assessment),
           findings: assessment.findings.map((f) => ({
             ...f,
             id: f.previousFindingId ?? randomUUID(),
@@ -5600,10 +5559,7 @@ export class ProjectFlowController {
         this.failOperation(op, error);
       throw error;
     } finally {
-      const current = this.need<FlowOperation>("flow_operations", op.id),
-        runId = current.correctionRunId ?? current.runId;
-      if (!runId || this.store.get<Run>("runs", runId)?.status !== "unknown")
-        await this.artifacts.remove(this.artifacts.get(disposable.id));
+      await this.releaseReviewCopy(op.id, disposable.id);
     }
   }
   private meetingDecision(

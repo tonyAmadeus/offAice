@@ -70,7 +70,7 @@ function commandForMatching(command:string):string {
 export function bindFlowEvidence(evidence:Evidence[],allEvents:TimelineEvent[],runIds:string[]):Evidence[]{
   const events=allEvents.filter(e=>runIds.includes(e.runId)&&e.fidelity==='native'&&['tool','output'].includes(e.kind));
   return evidence.map(e=>{
-    if(e.kind!=='command')return {...e,eventIds:e.eventIds.filter(id=>events.some(event=>event.id===id)),source:e.eventIds.some(id=>events.some(event=>event.id===id))?'observed':'reported'};
+    if(e.kind!=='command'&&!e.commandKindInferred)return {...e,eventIds:e.eventIds.filter(id=>events.some(event=>event.id===id)),source:e.eventIds.some(id=>events.some(event=>event.id===id))?'observed':'reported'};
     const command=typeof e.command==='string'?commandForMatching(e.command):undefined;
     const starts=events.filter(event=>{const native=eventCommand(event);return typeof native==='string'&&command!==undefined&&commandForMatching(native)===command;}),completed=events.filter(end=>starts.some(start=>completes(start,end)));
     // Prefer a recorded matching invocation; otherwise keep a completion whose code is unavailable.

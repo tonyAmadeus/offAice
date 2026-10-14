@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 
 export function assertRealAccountConsent(args = process.argv) {
   if (!args.includes('--use-real-account') || !args.includes('--app-closed')) {
-    throw new Error('这项测试会使用真实登录并消耗额度。请先取得主人同意、从托盘退出 AIROOM，再明确传入 --use-real-account --app-closed。普通 verify 不运行这项测试。');
+    throw new Error('这项测试会使用真实登录并消耗额度。请先取得账号所有者同意、从托盘退出 AIROOM，再明确传入 --use-real-account --app-closed。普通 verify 不运行这项测试。');
   }
 }
 export function realAccountTestEnvironment(args = process.argv, base = process.env) {

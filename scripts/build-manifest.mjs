@@ -4,6 +4,7 @@ import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {verifyRuntimeDependencies} from './runtime-dependencies.mjs';
+import {executableSignature} from './windows-signature.mjs';
 
 /** Written before installers are archived, so installed copies identify their actual source. */
 export async function writeBuildManifest(directory,dependencies){
@@ -13,6 +14,7 @@ export async function writeBuildManifest(directory,dependencies){
   await collect('resources/app/dist');const hashes={};
   for(const file of files)hashes[file]=createHash('sha256').update(await readFile(path.join(directory,file))).digest('hex');
   const receipt={builtAt:new Date().toISOString(),sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:workspace,encoding:'utf8',windowsHide:true}).trim(),sourceDirty:!!execFileSync('git',['status','--porcelain','--untracked-files=no'],{cwd:workspace,encoding:'utf8',windowsHide:true}).trim(),deployment:'pending-installation',dependencies,hashes};
+  receipt.windowsSignature=executableSignature(path.join(directory,'AIROOM.exe'));
   await writeFile(path.join(directory,'build-manifest.json'),JSON.stringify(receipt,null,2));return receipt;
 }
 

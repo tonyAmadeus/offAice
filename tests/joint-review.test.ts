@@ -13,7 +13,7 @@ import {quotaReport} from '../src/shared/quota';
 
 test('joint stages register the full barrier, share the global queue, exclude self, and pass the conclusion into a formal pending plan',async()=>{
   let h:Awaited<ReturnType<typeof jointHarness>>;
-  h=await jointHarness({handler:async call=>{if(call.kind==='joint-independent'){assert.equal(h.engine.store.list<any>('flow_joint_slots').filter(s=>s.stage==='independent').length,3);assert.equal(call.material.candidates,undefined);await new Promise(r=>setTimeout(r,60));}if(call.kind==='joint-peer'){assert.equal(h.calls.filter(c=>c.kind==='joint-independent').length,3);assert.equal(h.engine.store.list<any>('flow_joint_slots').filter(s=>s.stage==='independent'&&s.status==='completed').length,3);assert.equal(call.material.candidates.length,2);assert.ok(call.material.candidates.every((p:any)=>!p.proposal.includes((call.ctx.session.memberId??call.ctx.session.provider))&&p.memberId===undefined&&p.slotId===undefined));}}});
+  h=await jointHarness({handler:async call=>{if(call.kind==='joint-independent'){assert.equal(h.engine.store.list<any>('flow_joint_slots').filter(s=>s.stage==='independent').length,3);assert.equal(call.material.candidates,undefined);await new Promise(r=>setTimeout(r,60));}if(call.kind==='joint-peer'){assert.equal(h.calls.filter(c=>c.kind==='joint-independent').length,3);assert.equal(h.engine.store.list<any>('flow_joint_slots').filter(s=>s.stage==='independent'&&s.status==='completed').length,3);assert.equal(call.material.candidates.length,2);assert.ok(call.material.candidates.every((p:any)=>!p.proposal.includes((call.ctx.session.memberId??call.ctx.session.provider))&&p.memberId===undefined&&p.memberName===undefined&&p.slotId===undefined));}}});
   try{const {jointReviewId:id}=await h.start(),d=await h.wait(id,s=>s.review.status==='completed');assert.equal(h.calls.length,7);assert.equal(h.peak(),2);assert.equal(d.review.cost.baseCalls,7);assert.equal(d.review.cost.completedCalls,7);assert.equal(d.review.cost.additionalCalls,0);assert.equal(h.engine.store.list('flow_tasks').length,0);assert.equal(h.engine.store.roomView(`project:${h.project.id}`).messages.filter(m=>m.jointReview).length,1);assert.equal(h.engine.snapshot().room.messages.length,0);
     await h.engine.invoke('projectFlow.start',{requestId:'from-review',projectId:h.project.id,sourceJointReviewId:id,leadMemberId:'codex',memberIds:['codex','claude','dsh']});
     const until=Date.now()+5000;let flow:ProjectFlowSnapshot;do{flow=await h.engine.invoke('projectFlow.get',{projectId:h.project.id}) as ProjectFlowSnapshot;if(flow.plan)break;await new Promise(r=>setTimeout(r,20));}while(Date.now()<until);
@@ -131,5 +131,30 @@ test('refuting a blocking claim requires independent recorded evidence; contradi
 });
 test('mutation receipts are idempotent, stale revisions and foreign references are rejected, and completed history cannot be paused',async()=>{
   const h=await jointHarness();try{const p={requestId:'fixed-joint-start',projectId:h.project.id,kind:'proposal',subject:'同一方案',reviewerMemberIds:['codex','claude'],leadMemberId:'codex',peerReview:false};const a=await h.engine.invoke('projectFlow.jointReview.start',p) as {jointReviewId:string};assert.deepEqual(await h.engine.invoke('projectFlow.jointReview.start',p),a);await assert.rejects(h.engine.invoke('projectFlow.jointReview.start',{...p,subject:'另一个议题'}),/请求编号/);assert.equal(h.engine.store.list('flow_joint_reviews').length,1);const d=await h.wait(a.jointReviewId,s=>s.review.status==='completed');await assert.rejects(h.engine.invoke('projectFlow.jointReview.pause',{requestId:'stale-pause',jointReviewId:d.review.id,projectId:h.project.id,expectedRevision:1}),/已更新/);await assert.rejects(h.act(d.review.id,'pause'),/已结束/);await assert.rejects(h.engine.invoke('projectFlow.jointReview.get',{projectId:'foreign',jointReviewId:d.review.id}),/不属于/);await assert.rejects(h.start({peerReview:'yes'}),/布尔/);}
+  finally{await h.dispose();}
+});
+
+
+test('structured GPT proposals are preserved locally without consuming a format correction',async()=>{
+  const proposal={concept:'办公室群像',storyboard:[{time:'0–5s',description:'全员登场'}]};
+  const h=await jointHarness({handler:async c=>c.kind==='joint-independent'?{...opinion('GPT'),proposal}:undefined});
+  try{const {jointReviewId:id}=await h.start(),d=await h.wait(id,s=>s.review.status==='completed');
+    assert.ok(d.slots.filter(s=>s.stage==='independent').every(s=>s.opinion?.summary==='GPT 的意见'&&JSON.parse(s.opinion.proposal!).concept===proposal.concept));assert.equal(h.calls.some(c=>c.correction),false);
+  }finally{await h.dispose();}
+});
+
+test('format correction keeps original prose while rejecting changed decisions and findings',async()=>{
+  const h=await jointHarness({handler:async c=>c.kind==='joint-independent'?c.correction?{...opinion('改写'),proposal:'改成完全不同的方案'}:{...opinion('原稿'),extraKey:'错误字段'}:undefined});
+  try{const {jointReviewId:id}=await h.start(),d=await h.wait(id,s=>s.review.status==='completed');
+    assert.ok(d.slots.filter(s=>s.stage==='independent').every(s=>s.opinion?.summary==='原稿 的意见'&&s.opinion.proposal==='原稿 的候选正文'));assert.equal(h.calls.filter(c=>c.correction).length,3);
+  }finally{await h.dispose();}
+});
+
+test('summary prompt has no preselected candidate and accepts a reasoned non-first recommendation',async()=>{
+  const h=await jointHarness({handler:async c=>{if(c.kind==='joint-summary'){
+    const example=JSON.parse(c.prompt.split('只返回 JSON：')[1].split('\n')[0]).payload;assert.equal(example.recommendedSlotId,undefined);
+    assert.match(c.material.instruction,/不默认选择第一份/);return {...summary(c.material),recommendedSlotId:c.material.candidates.at(-1).slotId};
+  }}});
+  try{const {jointReviewId:id}=await h.start(),d=await h.wait(id,s=>s.review.status==='completed');assert.equal(d.review.conclusion?.recommendedSlotId,h.calls.find(c=>c.kind==='joint-summary')!.material.candidates.at(-1).slotId);}
   finally{await h.dispose();}
 });

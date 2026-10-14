@@ -9,6 +9,7 @@ import { DEFAULT_ROOM_THREAD, ROOM_PAGE_SIZE, firstMessageTitle, isRoomPass, roo
 import { redact } from './security';
 import {callUsage} from '../shared/call-usage';
 import {roundtableContextMessage} from '../shared/roundtable';
+import {runSummary} from '../shared/run-summary';
 const attentionReferenceFields:Partial<Record<string,'projectId'|'sessionId'|'runId'|'threadId'|'roomId'>>={projects:'projectId',sessions:'sessionId',runs:'runId',room_threads:'threadId',personal_rooms:'roomId'};
 
 export class Store {
@@ -18,6 +19,21 @@ export class Store {
   private entityList?:StatementSync;
   private roomsReady=false;
   private readCache?:Map<string,unknown>;
+  private readonly statements=new Map<string,StatementSync>();
+  /** Fixed SQL text is prepared once per connection. */
+  private sql(text:string):StatementSync {
+    let statement=this.statements.get(text);
+    if(!statement)this.statements.set(text,statement=this.db.prepare(text));
+    return statement;
+  }
+  /** Event log lines are appended in batches; SQLite stays the record written per event. */
+  private pendingLog=new Map<string,string[]>();
+  private logTimer?:NodeJS.Timeout;
+  flushLog():void {
+    if(this.logTimer){clearTimeout(this.logTimer);this.logTimer=undefined;}
+    const pending=this.pendingLog;this.pendingLog=new Map();
+    for(const [date,lines] of pending)try{appendFileSync(path.join(this.dataDirectory,'logs',`${date}.jsonl`),lines.join(''),'utf8');}catch{/* The database already holds these events. */}
+  }
   /** Reuse decoded facts during one synchronous projection; every write invalidates them. */
   readScope<T>(action:()=>T):T {
     if(this.readCache)return action();
@@ -41,11 +57,13 @@ export class Store {
       CREATE INDEX IF NOT EXISTS events_run ON events(run_id,sequence);
       CREATE INDEX IF NOT EXISTS room_thread_messages ON entities(COALESCE(json_extract(value,'$.threadId'),'room-main')) WHERE entity='room_messages';
       CREATE INDEX IF NOT EXISTS room_speaking_runs ON entities(json_extract(value,'$.runId')) WHERE entity='room_messages' AND json_extract(value,'$.status')='speaking';`);
+    // A run's receipt never needed its own copy of the task: the run holds it. Supplements keep their text.
+    this.sql("UPDATE entities SET value=json_remove(value,'$.text') WHERE entity='outbox' AND COALESCE(json_extract(value,'$.kind'),'')<>'steer' AND json_type(value,'$.text') IS NOT NULL").run();
     try{
       // Older profiles implicitly contained the three templates. Materialize them once;
       // a genuinely new profile starts empty and never recreates deleted cards.
       if(!this.get('team_migrations','explicit-members-v1')) {
-        const legacy=this.db.prepare('SELECT 1 FROM entities LIMIT 1').get();
+        const legacy=this.sql('SELECT 1 FROM entities LIMIT 1').get();
         this.db.exec('BEGIN IMMEDIATE');
         try {
           if(legacy)for(const member of BUILTIN_MEMBERS)if(!this.get('members',member.id)&&!this.get('removed_members',member.id))this.put('members',member.id,member);
@@ -74,7 +92,7 @@ export class Store {
       for(const thread of this.list<RoomThread>('room_threads'))this.put('room_threads',thread.id,{...thread,roomId:'global'});
       this.put('room_cursors','global',{id:active.id});
       this.put('room_states','global',{...this.get<RoomState>('room','state')??{active:false,mode:'chat'},roomId:'global',revision:1});
-      this.db.prepare("UPDATE entities SET value=json_set(value,'$.threadId',?) WHERE entity='room_messages' AND json_extract(value,'$.threadId') IS NULL").run(DEFAULT_ROOM_THREAD);
+      this.sql("UPDATE entities SET value=json_set(value,'$.threadId',?) WHERE entity='room_messages' AND json_extract(value,'$.threadId') IS NULL").run(DEFAULT_ROOM_THREAD);
       this.put('room_migrations','rooms-v1',{at:new Date().toISOString(),legacyCurrent:current?.id,globalThreadId:active.id});
       this.db.exec('COMMIT');
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -87,14 +105,14 @@ export class Store {
   get<T>(entity:string,id:string):T|undefined {
     if(this.roomsReady&&entity==='room'&&(id==='state'||id==='current')){entity=id==='state'?'room_states':'room_cursors';id='global';}
     const bytes=this.cachedRead('get:'+JSON.stringify([entity,id]),()=>{
-      const query=this.entityRead??=this.db.prepare('SELECT value FROM entities WHERE entity=? AND id=?');
+      const query=this.entityRead??=this.sql('SELECT value FROM entities WHERE entity=? AND id=?');
       return (query.get(entity,id) as {value:string}|undefined)?.value;
     });
     // Each caller still receives its own object; mutating a read is never a write.
     return bytes===undefined?undefined:JSON.parse(bytes) as T;
   }
   list<T>(entity:string):T[] {
-    return [...this.cachedRead('list:'+entity,()=>((this.entityList??=this.db.prepare('SELECT value FROM entities WHERE entity=? ORDER BY rowid')).all(entity) as {value:string}[]).map(row=>JSON.parse(row.value) as T))];
+    return [...this.cachedRead('list:'+entity,()=>((this.entityList??=this.sql('SELECT value FROM entities WHERE entity=? ORDER BY rowid')).all(entity) as {value:string}[]).map(row=>JSON.parse(row.value) as T))];
   }
   put(entity:string,id:string,value:unknown):void {
     if(this.roomsReady&&entity==='room'&&(id==='state'||id==='current')){entity=id==='state'?'room_states':'room_cursors';id='global';}
@@ -104,7 +122,7 @@ export class Store {
       const message=value as RoomMessage;
       if(message.author==='user'&&(message.roomId??'global')==='global'&&!message.system&&!message.contextOnly&&!message.discussionControl)this.nameRoomThread(message.threadId??DEFAULT_ROOM_THREAD,message.text);
     }
-    this.db.prepare('INSERT INTO entities(entity,id,value) VALUES(?,?,?) ON CONFLICT(entity,id) DO UPDATE SET value=excluded.value').run(entity,id,JSON.stringify(redact(value)));
+    this.sql('INSERT INTO entities(entity,id,value) VALUES(?,?,?) ON CONFLICT(entity,id) DO UPDATE SET value=excluded.value').run(entity,id,JSON.stringify(redact(value)));
     this.readCache?.clear();
     if(this.roomsReady&&(entity==='room_threads'||entity==='room_messages')){const roomId=entity==='room_threads'?(value as RoomThread).roomId:this.get<RoomThread>('room_threads',(value as RoomMessage).threadId??DEFAULT_ROOM_THREAD)?.roomId;if(roomId)this.put('room_states',roomId,this.roomState(roomId));}
   }
@@ -112,7 +130,7 @@ export class Store {
   nameRoomThread(threadId:string,text:string){
     const thread=this.get<RoomThread>('room_threads',threadId),roomId=thread?.roomId??'global';
     if(!thread||roomId!=='global'&&!roomId.startsWith('desk:')||thread.autoTitle===false||thread.autoTitle!==true&&thread.title!=='当前话题')return;
-    if(thread.autoTitle!==true&&this.db.prepare("SELECT 1 FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=? AND json_extract(value,'$.author')='user' AND COALESCE(json_extract(value,'$.system'),0)=0 AND COALESCE(json_extract(value,'$.contextOnly'),0)=0 AND COALESCE(json_extract(value,'$.discussionControl'),0)=0 LIMIT 1").get(threadId)){this.put('room_threads',threadId,{...thread,autoTitle:false});return;}
+    if(thread.autoTitle!==true&&this.sql("SELECT 1 FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=? AND json_extract(value,'$.author')='user' AND COALESCE(json_extract(value,'$.system'),0)=0 AND COALESCE(json_extract(value,'$.contextOnly'),0)=0 AND COALESCE(json_extract(value,'$.discussionControl'),0)=0 LIMIT 1").get(threadId)){this.put('room_threads',threadId,{...thread,autoTitle:false});return;}
     const title=firstMessageTitle(text,this.members());if(!title)return;
     this.put('room_threads',threadId,{...thread,title,autoTitle:false});
     if(roomId.startsWith('desk:')){
@@ -130,20 +148,35 @@ export class Store {
     const query=`SELECT value FROM entities WHERE entity=?${system===undefined?'':" AND COALESCE(json_extract(value,'$.system'),0)=?"} ORDER BY rowid DESC LIMIT ?`;
     const rows=(system===undefined?this.db.prepare(query).all(entity,count):this.db.prepare(query).all(entity,system?1:0,count)) as {value:string}[];return rows.map(row=>JSON.parse(row.value));
   }
-  pruneHistory(entity:string,keep:number,system=false){this.db.prepare("DELETE FROM entities WHERE entity=? AND id IN (SELECT id FROM entities WHERE entity=? AND COALESCE(json_extract(value,'$.system'),0)=? AND json_extract(value,'$.status')<>'running' ORDER BY rowid DESC LIMIT -1 OFFSET ?)").run(entity,entity,system?1:0,Math.max(1,keep));this.readCache?.clear();}
+  /** Keeps the newest `keep` records of each entity by creation order; for receipts whose replay window is short. */
+  retainNewest(limits:Record<string,number>):void {
+    const prune=()=>{for(const [entity,keep] of Object.entries(limits))this.sql('DELETE FROM entities WHERE entity=? AND rowid NOT IN (SELECT rowid FROM entities WHERE entity=? ORDER BY rowid DESC LIMIT ?)').run(entity,entity,Math.max(1,Math.floor(keep)));};
+    if(this.db.isTransaction)prune();else this.transaction(prune);
+    this.readCache?.clear();
+  }
+  /** Rewrites the file when at least 8 MB and a quarter of it is free. VACUUM keeps row order. */
+  compact():{beforePages:number;afterPages:number}|undefined {
+    const pages=()=>Number((this.db.prepare('PRAGMA page_count').get() as {page_count:number}).page_count);
+    const free=Number((this.db.prepare('PRAGMA freelist_count').get() as {freelist_count:number}).freelist_count),pageSize=Number((this.db.prepare('PRAGMA page_size').get() as {page_size:number}).page_size),beforePages=pages();
+    if(this.db.isTransaction||free*pageSize<8*1024*1024||free<beforePages/4)return;
+    // Compaction is optional; a busy or failed VACUUM leaves the database exactly as it was.
+    try{this.db.exec('VACUUM');}catch{return;}finally{this.readCache?.clear();}
+    return {beforePages,afterPages:pages()};
+  }
+  pruneHistory(entity:string,keep:number,system=false){this.sql("DELETE FROM entities WHERE entity=? AND id IN (SELECT id FROM entities WHERE entity=? AND COALESCE(json_extract(value,'$.system'),0)=? AND json_extract(value,'$.status')<>'running' ORDER BY rowid DESC LIMIT -1 OFFSET ?)").run(entity,entity,system?1:0,Math.max(1,keep));this.readCache?.clear();}
   private clearAttentionReferences(field:'projectId'|'sessionId'|'runId'|'threadId'|'roomId',id:string){
-    this.db.prepare("DELETE FROM entities WHERE entity='attention_dismissals' AND json_extract(value,?)=?").run('$.'.concat(field),id);
+    this.sql("DELETE FROM entities WHERE entity='attention_dismissals' AND json_extract(value,?)=?").run('$.'.concat(field),id);
   }
   delete(entity:string,id:string):void {
     this.readCache?.clear();
-    if(entity==='room_threads')this.db.prepare("DELETE FROM entities WHERE entity='composer_drafts' AND json_extract(value,'$.threadId')=?").run(id);
-    const field=attentionReferenceFields[entity],remove=()=>{this.db.prepare('DELETE FROM entities WHERE entity=? AND id=?').run(entity,id);if(field)this.clearAttentionReferences(field,id);};
+    if(entity==='room_threads')this.sql("DELETE FROM entities WHERE entity='composer_drafts' AND json_extract(value,'$.threadId')=?").run(id);
+    const field=attentionReferenceFields[entity],remove=()=>{this.sql('DELETE FROM entities WHERE entity=? AND id=?').run(entity,id);if(field)this.clearAttentionReferences(field,id);};
     if(field&&!this.db.isTransaction)this.transaction(remove);else remove();
   }
   deleteEntitiesWhere(entity:string,match:(value:unknown)=>boolean):void {
-    for (const row of this.db.prepare('SELECT id,value FROM entities WHERE entity=?').all(entity) as {id:string;value:string}[]) if (match(JSON.parse(row.value))) this.delete(entity,row.id);
+    for (const row of this.sql('SELECT id,value FROM entities WHERE entity=?').all(entity) as {id:string;value:string}[]) if (match(JSON.parse(row.value))) this.delete(entity,row.id);
   }
-  deleteSessionEvents(sessionId:string):void { this.db.prepare('DELETE FROM events WHERE session_id=?').run(sessionId); }
+  deleteSessionEvents(sessionId:string):void { this.sql('DELETE FROM events WHERE session_id=?').run(sessionId); }
   /** The newest quota report per executor, so the usage meter works without shipping every event. */
   private latestUsage=new Map<string,{sequence:number;event:TimelineEvent}>();
   private usageLoaded=false;
@@ -162,22 +195,27 @@ export class Store {
   liveEvents():TimelineEvent[]{
     this.loadUsage();
     // Native completion precedes the coordinator's final message write. Keep its existing text across that gap.
-    const speaking=new Set((this.db.prepare("SELECT json_extract(value,'$.runId') AS runId FROM entities WHERE entity='room_messages' AND json_extract(value,'$.status')='speaking' AND json_type(value,'$.runId')='text'").all() as {runId:string}[]).map(row=>row.runId));
+    const speaking=new Set((this.sql("SELECT json_extract(value,'$.runId') AS runId FROM entities WHERE entity='room_messages' AND json_extract(value,'$.status')='speaking' AND json_type(value,'$.runId')='text'").all() as {runId:string}[]).map(row=>row.runId));
     const active=this.list<Run>('runs').filter(run=>speaking.has(run.id)||!run.completedAt&&['queued','running','waiting_user','stopping','rate_limited'].includes(run.status)).map(run=>run.id);
     const rows=active.length?this.db.prepare(`SELECT sequence,value FROM events WHERE run_id IN (${active.map(()=>'?').join(',')}) ORDER BY sequence`).all(...active) as {sequence:number;value:string}[]:[];
     const usage=[...this.latestUsage.values()].filter(item=>!rows.some(row=>row.sequence===item.sequence));
     return [...usage,...rows.map(row=>({sequence:row.sequence,event:JSON.parse(row.value) as TimelineEvent}))].sort((a,b)=>a.sequence-b.sequence).map(item=>item.event);
   }
-  appendEvent(event:TimelineEvent):void {
+  /** Returns the stored (redacted) event so callers publish exactly what was recorded. */
+  appendEvent(event:TimelineEvent):TimelineEvent {
     const safe=redact(event);
     // Persistent event IDs make retries idempotent; never log a second duplicate.
-    const inserted=this.db.prepare('INSERT OR IGNORE INTO events(id,session_id,run_id,value) VALUES(?,?,?,?)').run(safe.id,safe.sessionId,safe.runId,JSON.stringify(safe));
+    const inserted=this.sql('INSERT OR IGNORE INTO events(id,session_id,run_id,value) VALUES(?,?,?,?)').run(safe.id,safe.sessionId,safe.runId,JSON.stringify(safe));
     const date=/^\d{4}-\d{2}-\d{2}T/.test(safe.at)?safe.at.slice(0,10):new Date().toISOString().slice(0,10);
     if (inserted.changes) this.rememberUsage(safe,Number(inserted.lastInsertRowid));
-    if (inserted.changes) appendFileSync(path.join(this.dataDirectory,'logs',`${date}.jsonl`),JSON.stringify(safe)+'\n','utf8');
+    if (inserted.changes) {
+      const lines=this.pendingLog.get(date)??[];lines.push(JSON.stringify(safe)+'\n');this.pendingLog.set(date,lines);
+      this.logTimer??=setTimeout(()=>this.flushLog(),250);this.logTimer.unref?.();
+    }
+    return safe;
   }
   listEvents(sessionId?:string):TimelineEvent[] {
-    const query=sessionId ? this.db.prepare('SELECT value FROM events WHERE session_id=? ORDER BY sequence') : this.db.prepare('SELECT value FROM events ORDER BY sequence');
+    const query=sessionId ? this.sql('SELECT value FROM events WHERE session_id=? ORDER BY sequence') : this.sql('SELECT value FROM events ORDER BY sequence');
     const rows=(sessionId ? query.all(sessionId) : query.all()) as {value:string}[];
     return rows.map(row=>JSON.parse(row.value) as TimelineEvent);
   }
@@ -185,7 +223,7 @@ export class Store {
   eventsForRuns(runIds: readonly (string | undefined)[]): TimelineEvent[] {
     const ids = [...new Set(runIds.filter((id): id is string => typeof id === 'string' && id.length > 0))];
     if (!ids.length) return [];
-    const rows = this.db.prepare('SELECT value FROM events WHERE run_id IN (SELECT value FROM json_each(?)) ORDER BY sequence').all(JSON.stringify(ids)) as { value: string }[];
+    const rows = this.sql('SELECT value FROM events WHERE run_id IN (SELECT value FROM json_each(?)) ORDER BY sequence').all(JSON.stringify(ids)) as { value: string }[];
     return rows.map(row => JSON.parse(row.value) as TimelineEvent);
   }
   runEvents(runId:string):TimelineEvent[] {return this.eventsForRuns([runId]);}
@@ -212,7 +250,7 @@ export class Store {
   /** Log-only pagination: a global sequence can have gaps between these runs. It is not a message cursor. */
   eventWatermark(sessionId?:string):number {const query=this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM events'+(sessionId?' WHERE session_id=?':''));return Number(((sessionId?query.get(sessionId):query.get()) as {n:number}).n);}
   eventPage(runIds:string[],after:number,through:number,limit:number):{sequence:number;event:TimelineEvent}[] {
-    const rows=this.db.prepare('SELECT sequence,value FROM events WHERE run_id IN (SELECT value FROM json_each(?)) AND sequence>? AND sequence<=? ORDER BY sequence LIMIT ?').all(JSON.stringify(runIds),after,through,limit) as {sequence:number;value:string}[];
+    const rows=this.sql('SELECT sequence,value FROM events WHERE run_id IN (SELECT value FROM json_each(?)) AND sequence>? AND sequence<=? ORDER BY sequence LIMIT ?').all(JSON.stringify(runIds),after,through,limit) as {sequence:number;value:string}[];
     return rows.map(row=>({sequence:row.sequence,event:JSON.parse(row.value)}));
   }
   /** Bounded native command records, retaining both the beginning and end of a long run. */
@@ -234,7 +272,7 @@ export class Store {
         this.put('runs',run.id,{...run,status:mightBeDelivered?'unknown':'interrupted',delivery:mightBeDelivered?'unknown':'withdrawn',updatedAt:now,error:mightBeDelivered?'上次任务的投递或执行结果尚未核对，未自动重发。':'上次进程已结束，任务未自动恢复。'});
         this.put('blocked_sessions',run.sessionId,{runId:run.id,reason:'重启后等待明确的新任务，不自动继续旧队列',createdAt:now});
       }
-      for (const row of this.db.prepare('SELECT id,value FROM entities WHERE entity=?').all('outbox') as {id:string;value:string}[]) {
+      for (const row of this.sql('SELECT id,value FROM entities WHERE entity=?').all('outbox') as {id:string;value:string}[]) {
         const entry=JSON.parse(row.value) as {runId?:string;delivery?:string;kind?:string};
         const run=entry.runId?this.get<Run>('runs',entry.runId):undefined;
         if (!['prepared','sent'].includes(entry.delivery??'') && !(entry.delivery==='confirmed' && run?.status==='unknown')) continue;
@@ -317,7 +355,7 @@ export class Store {
     const cursor=this.get<{id:string}>('room_cursors',roomId);if(!cursor)throw new Error('会议室尚未创建，请先初始化项目会议室');return this.roomThread(cursor.id,roomId);
   }
   roomThreads(roomId:RoomId='global'):RoomThread[] {
-    const counts=this.cachedRead('room-thread-counts',()=>new Map((this.db.prepare("SELECT COALESCE(json_extract(value,'$.threadId'),'room-main') AS thread, COUNT(*) AS count FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.system'),0)=0 GROUP BY thread").all() as {thread:string;count:number}[]).map(row=>[row.thread,row.count])));
+    const counts=this.cachedRead('room-thread-counts',()=>new Map((this.sql("SELECT COALESCE(json_extract(value,'$.threadId'),'room-main') AS thread, COUNT(*) AS count FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.system'),0)=0 GROUP BY thread").all() as {thread:string;count:number}[]).map(row=>[row.thread,row.count])));
     return this.list<RoomThread>('room_threads').filter(thread=>(thread.roomId??'global')===roomId).map(thread=>({...thread,count:counts.get(thread.id)??0})).sort((a,b)=>Number(Boolean(a.archivedAt))-Number(Boolean(b.archivedAt))||(b.archivedAt??b.createdAt).localeCompare(a.archivedAt??a.createdAt));
   }
   roomHistory(threadId?:string,before?:string,limit=ROOM_PAGE_SIZE,roomId:RoomId='global'):RoomHistory {
@@ -325,11 +363,11 @@ export class Store {
     const count=Math.max(1,Math.min(1000,Math.floor(limit)));
     let cursor=Number.MAX_SAFE_INTEGER;
     if (before) {
-      const row=this.db.prepare("SELECT rowid AS position FROM entities WHERE entity='room_messages' AND id=? AND COALESCE(json_extract(value,'$.threadId'),'room-main')=?").get(before,threadId) as {position:number}|undefined;
+      const row=this.sql("SELECT rowid AS position FROM entities WHERE entity='room_messages' AND id=? AND COALESCE(json_extract(value,'$.threadId'),'room-main')=?").get(before,threadId) as {position:number}|undefined;
       if (!row) throw new Error('历史分页位置已失效，请重新打开话题');
       cursor=row.position;
     }
-    const rows=this.db.prepare("SELECT value FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=? AND rowid<? ORDER BY rowid DESC LIMIT ?").all(threadId,cursor,count+1) as {value:string}[];
+    const rows=this.sql("SELECT value FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=? AND rowid<? ORDER BY rowid DESC LIMIT ?").all(threadId,cursor,count+1) as {value:string}[];
     const messages=rows.slice(0,count).reverse().map(row=>roundtableContextMessage(JSON.parse(row.value) as RoomMessage,roomId));
     const hasMore=rows.length>count;
     return {threadId,messages,hasMore,before:hasMore?messages[0]?.id:undefined};
@@ -337,7 +375,7 @@ export class Store {
   roomMessages(limit=300,threadId?:string,roomId:RoomId='global'):RoomMessage[] { return this.roomHistory(threadId,undefined,limit,roomId).messages; }
   allRoomMessages(threadId:string,roomId:RoomId='global'):RoomMessage[] {
     this.roomThread(threadId,roomId);
-    return [...this.cachedRead('room-messages:'+JSON.stringify([roomId,threadId]),()=>(this.db.prepare("SELECT value FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=? ORDER BY rowid").all(threadId) as {value:string}[]).map(row=>roundtableContextMessage(JSON.parse(row.value) as RoomMessage,roomId)))];
+    return [...this.cachedRead('room-messages:'+JSON.stringify([roomId,threadId]),()=>(this.sql("SELECT value FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=? ORDER BY rowid").all(threadId) as {value:string}[]).map(row=>roundtableContextMessage(JSON.parse(row.value) as RoomMessage,roomId)))];
   }
   archiveRoom(title?:string,inherited?:RoomThread['inherited']):RoomThread {
     const current=this.currentRoomThread(),at=new Date().toISOString();
@@ -353,7 +391,7 @@ export class Store {
   clearRoomThread(threadId:string,roomId:RoomId='global') {
     this.readCache?.clear();
     this.roomThread(threadId,roomId);
-    const clear=()=>{this.db.prepare("DELETE FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=?").run(threadId);this.db.prepare("DELETE FROM entities WHERE entity='composer_drafts' AND json_extract(value,'$.threadId')=?").run(threadId);this.clearAttentionReferences('threadId',threadId);};
+    const clear=()=>{this.sql("DELETE FROM entities WHERE entity='room_messages' AND COALESCE(json_extract(value,'$.threadId'),'room-main')=?").run(threadId);this.sql("DELETE FROM entities WHERE entity='composer_drafts' AND json_extract(value,'$.threadId')=?").run(threadId);this.clearAttentionReferences('threadId',threadId);};
     if(this.db.isTransaction)clear();else this.transaction(clear);
   }
   removeArchivedRoomThread(threadId:string,removeRecords?:()=>void) {
@@ -373,7 +411,7 @@ export class Store {
     }));
   }
   snapshot(options:{providers?:ProviderInfo[];settings?:Settings;backendReady?:boolean;deepseekKeyConfigured?:boolean}={}):Snapshot {
-    return {projects:this.list('projects'),sessions:this.list('sessions'),runs:this.list('runs'),approvals:this.list('approvals'),collaborations:this.list('collaborations'),events:this.liveEvents(),providers:options.providers??[],settings:options.settings??this.get<Settings>('settings','main')??DEFAULT_SETTINGS,dataDirectory:this.dataDirectory,...(this.get<{at:string}>('restore_info','main')?.at?{restoreEpoch:this.get<{at:string}>('restore_info','main')!.at}:{}),backendReady:options.backendReady??true,deepseekKeyConfigured:options.deepseekKeyConfigured??false,members:this.members(),removedMembers:this.historicalMembers(),executors:this.executors(),profile:this.profile(),room:this.roomView(),rooms:this.roomOverviews()};
+    return {projects:this.list('projects'),sessions:this.list('sessions'),runs:this.list<Run>('runs').map(runSummary),approvals:this.list('approvals'),collaborations:this.list('collaborations'),events:this.liveEvents(),providers:options.providers??[],settings:options.settings??this.get<Settings>('settings','main')??DEFAULT_SETTINGS,dataDirectory:this.dataDirectory,...(this.get<{at:string}>('restore_info','main')?.at?{restoreEpoch:this.get<{at:string}>('restore_info','main')!.at}:{}),backendReady:options.backendReady??true,deepseekKeyConfigured:options.deepseekKeyConfigured??false,members:this.members(),removedMembers:this.historicalMembers(),executors:this.executors(),profile:this.profile(),room:this.roomView(),rooms:this.roomOverviews()};
   }
-  close():void { this.db.close(); }
+  close():void { this.flushLog();this.db.close(); }
 }

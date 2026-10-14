@@ -45,7 +45,8 @@ export class FlowValidation {
   ) {
     const original = this.need<FlowOperation>("flow_operations", op.id).runId,
       bound = this.bindEvidence(payload.evidence, runId, original);
-    const problems = bound.filter((e) => commandEvidenceProblem(e));
+    // Missing presentation metadata is accepted; assessReview retains an unverified outcome.
+    const problems = bound.filter((e) => !e.commandKindInferred && commandEvidenceProblem(e));
     if (payload.verdict === "pass" && problems.length) {
       const messages = problems.map((e) => {
         const command = JSON.stringify((e.command ?? "").slice(0, 160)),

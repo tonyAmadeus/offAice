@@ -1,3 +1,5 @@
+import {parseCompatibleJson} from './flow-format';
+
 /** Envelope parsing is separate from discussion authority. Prose never supplies control decisions. */
 export class DiscussionFormatError extends Error {
   constructor(message: string, readonly retryable = false) { super(message); this.name = 'DiscussionFormatError'; }
@@ -67,13 +69,13 @@ function fields(raw: string, partial = false) {
 }
 
 export function discussionObject(text: string): Record<string, any> {
-  try { const value = JSON.parse(text.trim()); if (!value || Array.isArray(value) || typeof value !== 'object') throw new DiscussionFormatError('讨论回复必须是 JSON 对象。', true); }
+  try { const value = parseCompatibleJson(text.trim()); if (!value || Array.isArray(value) || typeof value !== 'object') throw new DiscussionFormatError('讨论回复必须是 JSON 对象。', true); }
   catch (error) { if (error instanceof DiscussionFormatError) throw error; }
   const spans = objects(text);
   if (spans.length > 1) throw new DiscussionFormatError('讨论回复包含多个对象，无法核对唯一轮次。');
   if (spans.length !== 1 || spans[0].end === undefined) throw new DiscussionFormatError('成员没有返回唯一、完整的讨论 JSON 对象。', true);
   const raw = text.slice(spans[0].start, spans[0].end);
-  let value: any; try { value = JSON.parse(raw); } catch { throw new DiscussionFormatError('讨论 JSON 格式无效。', true); }
+  let value: any; try { value = parseCompatibleJson(raw); } catch { throw new DiscussionFormatError('讨论 JSON 格式无效。', true); }
   // Duplicate metadata can hide a different turn or proposal; never repair or infer its authority.
   if (!fields(raw)) throw new DiscussionFormatError('讨论 JSON 包含重复或不明确的字段。');
   return value;

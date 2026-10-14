@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {zcodeInput} from './zcode-input';
 import { latestPersona, nativeContextNeedsRefresh } from '../native-context';
 import { plainRoomSpeech } from './chat-policy';
 import { zcodeRoomTools } from './zcode-chat';
@@ -93,7 +94,7 @@ export class ZcodeAdapter implements Adapter{
     const remembered=context.session.nativeId&&context.session.nativePersona?.nativeId===context.session.nativeId&&context.session.nativePersona.hash===personaHash&&!nativeContextNeedsRefresh(context.session,text.length);
     const input=context.session.nativeId?text:context.freshInput?.(true)??text;
     const prompt=[remembered?undefined:latestPersona(context.persona),input].filter(Boolean).join('\n\n');
-    if(prompt.length>14000)throw new Error('这条消息与上下文过长，请缩短内容或新建话题后重试。');
+    const inputChannel=zcodeInput(command,prompt);
     await mkdir(env.ZCODE_DATA_BASE_DIR!,{recursive:true});
     const model=context.run.requestedConfig?context.run.requestedConfig.model:Object.hasOwn(context.settings.models,this.executor.id)?context.settings.models[this.executor.id]:this.executor.model;
     const effort=context.run.requestedConfig?context.run.requestedConfig.effort:context.settings.efforts[this.executor.id];
@@ -109,7 +110,7 @@ export class ZcodeAdapter implements Adapter{
     finally{if(native){await native.close();if(this.child===native.child)this.child=undefined;}else this.child=undefined;}
     if(this.stopped)return {stopped:true};
     const nativeId=context.session.nativeId;
-    const args=['-p',prompt,'--output-format','stream-json','--mode',context.session.writeMode?'yolo':'plan'];
+    const args=['-p',inputChannel.argument,'--output-format','stream-json','--mode',context.session.writeMode?'yolo':'plan'];
     if(nativeId)args.push('--resume',nativeId);
     const denied:string[]=[];
     if(!context.session.writeMode)denied.push('Bash','js','NodeREPL','Write','Edit','MultiEdit','NotebookEdit','Agent','Task','Skill','ExitPlanMode','CreateWorkflow','AmendWorkflow','SaveWorkflow','CronCreate','CronUpdate','CronDelete','OffPeakCreate');
@@ -122,7 +123,8 @@ export class ZcodeAdapter implements Adapter{
     observeArguments(['--output-format','stream-json','--mode',context.session.writeMode?'yolo':'plan',permissions.network?'network':'offline']);
     const taskEnvironment=await zcodeRunModelEnvironment(env,selection);
     if(this.stopped){await taskEnvironment.cleanup();return {stopped:true};}
-    const child=spawnCli(command,args,{cwd:context.cwd,env:taskEnvironment.env});this.child=child;context.registerProcess(child);
+    const child=spawnCli(inputChannel.command,args,{cwd:context.cwd,env:taskEnvironment.env});this.child=child;context.registerProcess(child);
+    if(inputChannel.stdin!==undefined){child.stdin?.on('error',()=>{});child.stdin?.end(inputChannel.stdin,'utf8');}
     let generationStarted=false;
     const output=new ZcodeTaskOutput(event=>{
       if(this.stopped||nativeId&&event.sessionId!==nativeId||!output.models.some(model=>model.sessionId===event.sessionId&&model.turnId===event.turnId&&model.providerId===selection.providerId&&model.modelId===selection.modelId))return;

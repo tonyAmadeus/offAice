@@ -1,4 +1,5 @@
 import '../scripts/test-bootstrap.mjs';
+import {windowsConsoleArguments} from '../src/backend/windows-console';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -53,7 +54,7 @@ test('Cursor uses its own Node ABI and isolated config without inheriting host l
   const directory=await fixture();try{
     const item=await cursorPackage(path.join(directory,version),version),executor=catalogCandidate('cursor',item.entry),home=path.join(directory,'home'),env=managedCatalogEnvironment(executor,{CURSOR_API_KEY:'host-key',CURSOR_AUTH_TOKEN:'host-token',CURSOR_CONFIG_DIR:'host-profile',CURSOR_DATA_DIR:'host-data',CURSOR_API_URL:'host-endpoint',AIROOM_NODE_EXE:'wrong-host',AIROOM_NODE_VERSION:'1.0.0',NODE_COMPILE_CACHE:'host-cache'},home);
     assert.equal(env.CURSOR_API_KEY,undefined);assert.equal(env.CURSOR_AUTH_TOKEN,undefined);assert.equal(env.CURSOR_API_URL,undefined);assert.equal(env.CURSOR_CONFIG_DIR,path.join(home,'cursor'));assert.equal(env.CURSOR_DATA_DIR,path.join(home,'data/cursor'));assert.equal(env.NODE_COMPILE_CACHE,path.join(home,'cache/node'));
-    const launch=prepareCliLaunch({command:process.execPath,path:item.entry,prefix:[item.entry]},executor.args,env);assert.equal(launch.command,path.join(path.dirname(item.entry),'node.exe'));assert.equal(launch.env.ELECTRON_RUN_AS_NODE,undefined);assert.deepEqual(launch.args,[item.entry,'--disable-auto-update','acp']);
+    const launch=prepareCliLaunch({command:process.execPath,path:item.entry,prefix:[item.entry]},executor.args,env);assert.equal(launch.command,path.join(path.dirname(item.entry),'node.exe'));assert.equal(launch.env.ELECTRON_RUN_AS_NODE,undefined);assert.deepEqual(launch.args,[...windowsConsoleArguments(),item.entry,'--disable-auto-update','acp']);
     const adapter=new AcpAdapter(executor),context={cwd:directory,env:{...env,AIROOM_ACP_HOME:path.join(directory,'native')},settings:DEFAULT_SETTINGS,run:{provider:executor.id},session:{writeMode:false}} as unknown as AdapterContext,stamp=adapter.runtimeFingerprint(context);
     await writeFile(launch.command,'updated-fixture-host');assert.notEqual(adapter.runtimeFingerprint(context),stamp,'replacing the native Node host invalidates a cached ACP runtime');
   }finally{await clean(directory);}

@@ -6,6 +6,8 @@ import cp from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
 import {EventEmitter} from 'node:events';
 import {PassThrough} from 'node:stream';
+import {promisify} from 'node:util';
+const writeBrowserUrl=process.stderr.write.bind(process.stderr);
 function browserUrl(file,args){
  const name=String(file).split(/[\\/]/).at(-1).toLowerCase(),values=Array.isArray(args)?args.map(String):[];
  let text=[String(file),...values].join(' ');
@@ -18,13 +20,14 @@ function browserUrl(file,args){
  return handler?text.match(/https:\/\/[^\s<>"'\x1b]+/)?.[0]:undefined;
 }
 function relay(url,argv){
- process.stderr.write('\nAIROOM_BROWSER_URL '+url+'\n');
+ writeBrowserUrl('\nAIROOM_BROWSER_URL '+url+'\n');
  const child=new EventEmitter();Object.assign(child,{stdout:new PassThrough(),stderr:new PassThrough(),stdin:new PassThrough(),exitCode:null,signalCode:null,killed:false,pid:undefined});
  child.unref=()=>child;child.kill=()=>true;
- queueMicrotask(()=>{child.exitCode=0;child.stdout.end();child.stderr.end();const callback=argv.findLast(value=>typeof value==='function');callback?.(null,'','');child.emit('exit',0,null);child.emit('close',0,null);});return child;
+ queueMicrotask(()=>{child.emit('spawn');child.exitCode=0;child.stdout.end();child.stderr.end();const callback=argv.findLast(value=>typeof value==='function');callback?.(null,'','');child.emit('exit',0,null);child.emit('close',0,null);});return child;
 }
 for(const method of ['spawn','execFile','exec']){const original=cp[method];cp[method]=function(...argv){const url=browserUrl(argv[0],argv[1]);if(url)return relay(url,argv);
- const index=Array.isArray(argv[1])?2:1;if(typeof argv[index]==='function'||argv[index]===undefined)argv.splice(index,0,{windowsHide:true});else if(argv[index]&&typeof argv[index]==='object')argv[index]={...argv[index],windowsHide:true};return original.apply(this,argv);};}
+ const index=Array.isArray(argv[1])?2:1;if(typeof argv[index]==='function')argv.splice(index,0,{windowsHide:true});else argv[index]={...argv[index],windowsHide:true};return original.apply(this,argv);};
+ if(original[promisify.custom])cp[method][promisify.custom]=function(...argv){let child;const promise=new Promise((resolve,reject)=>{child=cp[method](...argv,(error,stdout,stderr)=>{if(error){Object.assign(error,{stdout,stderr});reject(error);}else resolve({stdout,stderr});});});promise.child=child;return promise;};}
 syncBuiltinESMExports();
 `;
 export function defaultBrowserLoginCommand(command:CliCommand){

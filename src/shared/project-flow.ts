@@ -27,6 +27,8 @@ export interface CriterionAssessment {criterion:string;rating:'meets'|'partly'|'
 export interface Evidence { kind:'command'|'quote'|'inspection'|'source'; description:string; command?:string; exitCode?:number; result:string; eventIds:string[]; source:'observed'|'reported' }
 export interface Evidence {title?:string;location?:string;excerpt?:string;sourceVerification?:'unverified'|'verified'|'mismatch';sourceNote?:string}
 export interface Evidence {exitCodeSource?:'observed'|'reported';observedExitCode?:number;executionStatus?:'completed'|'failed'}
+/** Internal provenance, never accepted as a member-supplied verification flag. */
+export interface Evidence {commandKindInferred?:true}
 export interface ReviewFinding { id:string; location:string; kind:'verified'|'suspected'|'suggestion'; severity:'blocking'|'should-fix'|'optional'; evidence:string; request:string;previousFindingId?:string;disposition?:'requires-fix'|'advice' }
 export interface FindingCheck {findingId:string;resolved:boolean;evidence:string}
 export interface Dispute {findingId:string;reason:string}

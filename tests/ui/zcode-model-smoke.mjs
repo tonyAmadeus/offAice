@@ -4,7 +4,7 @@ import {mkdir,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {chromium,expect} from '@playwright/test';
 import {createServer} from '../../scripts/ui-test-server.mjs';
-import {Engine} from '../../src/backend/engine.ts';
+import {Engine} from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 import {ZcodeAdapter} from '../../src/backend/adapters/zcode.ts';
 import {catalogCandidate} from '../../src/backend/executor-catalog.ts';
 

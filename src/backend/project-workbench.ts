@@ -1,16 +1,15 @@
+import {readableContent} from '../shared/content-presentation';
 import {createHash} from 'node:crypto';
 import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import type {Store} from './store';
 import type {Project,MemberProfile,Session} from '../shared/types';
-import {FlowError,criterionText,type ProjectFlow,type Plan,type Round,type Task,type Submission,type Review,type Integration,type Acceptance,type Decision,type RequestedRoundCheck} from '../shared/project-flow';
+import {FlowError,type ProjectFlow,type Plan,type Round,type Task,type Submission,type Review,type Integration,type Acceptance,type RequestedRoundCheck} from '../shared/project-flow';
 import type {MemberReport,MemberReportPage,ProjectRecord,RecordReceipt} from '../shared/project-workbench';
 import {redact,resolveSafePath} from './security';
 import {withProjectWrite,assertProjectBoundary} from './project-access';
-const CHECK_STATUS:Record<string,string>={queued:'排队中',running:'检查中',passed:'通过',changes_requested:'要求修改',inconclusive:'无法下结论',stale:'检查的是旧版本',blocked:'卡住了'};
 const digest=(s:string)=>createHash('sha256').update(s).digest('hex');
 const nameSafe=(s:string)=>s.replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').trim().replace(/[. ]+$/,'').slice(0,70)||'项目记录';
-const block=(s:string)=>s.split('\n').map(line=>'> '+line).join('\n');
 
 /** Projections over AIROOM facts. Reading reports never creates an executor session. */
 export class ProjectWorkbench {
@@ -41,7 +40,7 @@ export class ProjectWorkbench {
           if(role==='reviewer'&&integration?.peerReview?.memberId===memberId){const c=integration.peerReview;checks.push({id:integration.id+':peer',status:c.outcome,findings:c.findings,assessments:c.assessments??[],strengths:c.strengths??[]});}
           if(role==='reviewer')requested.filter(c=>c.roundId===round.id&&c.memberId===memberId).forEach(c=>checks.push({id:c.id,status:c.outcome??c.status,findings:c.findings??[],assessments:c.assessments??[],strengths:c.strengths??[]}));
           if(role==='lead'&&integration)checks.push({id:integration.id,status:integration.outcome??integration.status,findings:integration.findings,assessments:integration.assessments??[],strengths:integration.strengths??[]});
-          const summary=role==='author'?authoredSubs.map(s=>s.userSummary?.trim()||s.summary):role==='lead'?[round.report!.summary]:checks.map(c=>'检查结果：'+(CHECK_STATUS[c.status]??c.status));
+          const summary=role==='author'?authoredSubs.map(s=>s.userSummary?.trim()||s.summary):role==='lead'?[round.report!.summary]:checks.flatMap(c=>{const opinions=[...c.findings.map(f=>f.location+'：'+f.request),...c.assessments.map(a=>a.reason),...c.strengths];return opinions.length?opinions:[c.status==='passed'||c.status==='pass'?'没有补充意见。':'尚有待确认事项。'];});
           const at=[round.updatedAt,...authoredSubs.map(s=>s.updatedAt),...checked.map(r=>r.updatedAt)].sort().at(-1)!;
           reports.push({id:[round.id,memberId,role].join(':'),projectId:project.id,flowId:flow.id,planId:round.planId,roundId:round.id,memberId,memberName:names.get(memberId)??flow.memberNames?.[memberId]??memberId,role,title:'第 '+(round.index+1)+' 轮 · '+round.title,at,flowStatus:flow.status,planStatus:plan?.status??'历史方案',roundStatus:round.status,summary,
             tasks:authored.map(t=>{const sub=subs.find(s=>s.id===t.latestSubmissionId);return {id:t.id,title:t.title,status:t.status,sessionId:t.sessionId,submissionId:sub?.id,version:sub?.version,files:sub?.changes.map(c=>c.path)??[]};}),checks,
@@ -62,22 +61,30 @@ export class ProjectWorkbench {
   record(p:Record<string,unknown>):ProjectRecord {
     const flow=this.flow(String(p.flowId),p.projectId),stored=this.store.get<ProjectRecord>('flow_project_records',flow.id);
     const record=stored??this.generate(flow);
-    return {...record,receipt:this.store.get<RecordReceipt>('flow_record_receipts',flow.id)};
+    return {...record,markdown:stored?this.generate(flow).markdown:record.markdown,receipt:this.store.get<RecordReceipt>('flow_record_receipts',flow.id)};
   }
   roundExport(p:Record<string,unknown>){
     const round=this.store.get<Round>('flow_rounds',String(p.roundId));if(!round||round.projectId!==p.projectId)throw new FlowError('NOT_FOUND','轮次不属于这个项目。');
     const report=round.report;if(!report)throw new FlowError('NOT_FOUND','这个轮次还没有保存汇报。');
-    return {title:'第 '+(round.index+1)+' 轮 · '+round.title,markdown:'# '+round.title+'\n\n'+report.summary+'\n\n## 成果\n'+report.deliverables.map(s=>'- '+s).join('\n')+'\n\n## 检查\n'+report.validationSummary+'\n\n## 遗留问题\n'+(report.remainingIssues.map(s=>'- '+s).join('\n')||'无记录')+'\n\n## 下一步\n'+report.nextRoundSummary+'\n\n## 需要你判断\n'+report.userDecisionNeeded};
-  }
-  private allReports(flow:ProjectFlow){
-    const reports:MemberReport[]=[];let cursor:string|undefined;
-    do{const page=this.memberReports({projectId:flow.projectId,limit:100,cursor},flow.id);reports.push(...page.items);cursor=page.cursor;}while(cursor);
-    return reports;
+    return {title:'第 '+(round.index+1)+' 轮 · '+round.title,markdown:'# '+round.title+'\n\n'+readableContent(report.summary)+'\n\n## 成果\n'+report.deliverables.map(s=>'- '+s).join('\n')+'\n\n## 遗留问题\n'+(report.remainingIssues.map(s=>'- '+s).join('\n')||'无记录')+'\n\n## 下一步\n'+report.nextRoundSummary+'\n\n## 需要你判断\n'+report.userDecisionNeeded};
   }
   private generate(flow:ProjectFlow):ProjectRecord {
-    const project=this.project(flow.projectId),plans=this.records<Plan>('flow_plans',flow.id).sort((a,b)=>a.version-b.version),plan=plans.find(p=>p.id===flow.activePlanId)??plans.at(-1),rounds=this.records<Round>('flow_rounds',flow.id),accepts=this.records<Acceptance>('flow_acceptances',flow.id),decisions=this.records<Decision>('flow_decisions',flow.id),subs=this.records<Submission>('flow_submissions',flow.id),tasks=this.records<Task>('flow_tasks',flow.id);
-    const title=project.name+' · '+(plan?.objective??flow.topic??'项目工作'),summary=[plan?.objective??flow.topic??'',flow.status==='completed'?'已完成':flow.status==='cancelled'?'已取消':'进行中',...rounds.filter(r=>r.planId===flow.activePlanId).map(r=>r.title+'：'+(r.report?.summary??r.status)),...rounds.flatMap(r=>r.report?.remainingIssues??[])].join('\n').slice(0,12000);
-    const markdown=['# '+title,'状态：'+flow.status+'；记录时间：'+new Date().toISOString(),'## 目标',plan?.objective??flow.topic??'无记录','## 方案和版本',...plans.map(p=>'第 '+p.version+' 版 · '+p.status+'\n'+p.scope+'\n成果：'+p.deliverables.join('、')+'\n要求：'+p.acceptanceCriteria.map(criterionText).join('；')),'## 各轮汇报和验收',...rounds.sort((a,b)=>plans.findIndex(p=>p.id===a.planId)-plans.findIndex(p=>p.id===b.planId)||a.index-b.index).flatMap(r=>['### '+r.title+' · '+r.status+' · 方案 '+(plans.find(p=>p.id===r.planId)?.version??'?'),r.report?.summary??'尚无汇报',...(r.report?['检查：'+r.report.validationSummary,'遗留：'+(r.report.remainingIssues.join('；')||'无记录'),'下一步：'+r.report.nextRoundSummary]:[]),...(r.userChangeRequests??[]).map(change=>'用户驳回或要求修改 · '+change.at+'\n'+block(change.opinion)),...accepts.filter(a=>a.roundId===r.id).map(a=>a.status+' · '+a.actor+'\n'+block(a.opinion||'无附加意见'))]),'## 成员汇报',...this.allReports(flow).map(report=>report.memberName+' · '+report.role+' · '+report.title+'\n'+report.summary.join('\n')+'\n'+report.checks.flatMap(c=>[...c.assessments.map(a=>a.criterion+' · '+a.rating+'：'+a.reason),...c.strengths.map(s=>'优点：'+s)]).join('\n')),'## 决策',...decisions.map(d=>d.title+' · '+d.status+'\n'+block(d.reason)+'\n'+(d.answer?d.answer.choice+'\n'+block(d.answer.opinion??''):'尚未回答')),'## 改动的文件',...[...new Set(subs.flatMap(s=>s.changes.map(c=>c.path)))].map(s=>'- '+s),'## 遗留任务与问题',...tasks.filter(t=>!['accepted','cancelled'].includes(t.status)).map(t=>'- '+t.title+' · '+t.status+(t.blockedReason?' · '+t.blockedReason:'')),...rounds.flatMap(r=>(r.report?.remainingIssues??[]).map(s=>'- '+s))].join('\n\n');
+    const project=this.project(flow.projectId),plans=this.records<Plan>('flow_plans',flow.id).sort((a,b)=>a.version-b.version),plan=plans.find(p=>p.id===flow.activePlanId)??plans.at(-1),rounds=this.records<Round>('flow_rounds',flow.id),subs=this.records<Submission>('flow_submissions',flow.id),tasks=this.records<Task>('flow_tasks',flow.id);
+    const title=project.name+' · '+(plan?.objective??flow.topic??'项目工作');
+    const currentRounds=rounds.filter(r=>r.planId===plan?.id).sort((a,b)=>a.index-b.index);
+    const latest=new Set(tasks.filter(t=>t.planId===plan?.id&&t.status!=='cancelled').map(t=>t.latestSubmissionId));
+    const finalSubs=subs.filter(sub=>latest.has(sub.id));
+    const files=[...new Set(finalSubs.flatMap(sub=>sub.changes.filter(c=>c.kind!=='deleted').map(c=>c.path)))];
+    const remaining=[...new Set(currentRounds.flatMap(r=>r.report?.remainingIssues??[]))];
+    const state=flow.status==='completed'?'已完成':flow.status==='cancelled'?'已取消':'进行中';
+    const summary=[plan?.objective??flow.topic??'',state,...currentRounds.filter(round=>round.report).map(round=>round.title+'：'+readableContent(round.report!.summary)),...remaining].join('\n').slice(0,12000);
+    const markdown=['# '+title,'状态：'+state,'## 目标',plan?.objective??flow.topic??'无记录',
+      ...(plan?['## 方案',plan.scope,'## 成果',...plan.deliverables.map(item=>'- '+item)]:[]),
+      ...currentRounds.flatMap(round=>round.report?['## '+round.title,readableContent(round.report.summary),...round.report.deliverables.map(item=>'- '+item)]:[]),
+      ...(finalSubs.length?['## 成果说明',...finalSubs.map(sub=>readableContent(sub.userSummary?.trim()||sub.summary))]:[]),
+      ...(files.length?['## 成果文件',...files.map(file=>'- '+file)]:[]),
+      ...(remaining.length?['## 待处理事项',...remaining.map(item=>'- '+item)]:[]),
+      ...(currentRounds.at(-1)?.report?.nextRoundSummary?['## 下一步',currentRounds.at(-1)!.report!.nextRoundSummary]:[])].join('\n\n');
     return {id:flow.id,flowId:flow.id,projectId:flow.projectId,title,summary,markdown:redact(markdown),generatedAt:new Date().toISOString(),status:flow.status};
   }
   checkpoint(flowId:string){

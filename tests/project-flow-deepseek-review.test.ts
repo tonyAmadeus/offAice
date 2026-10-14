@@ -84,12 +84,12 @@ for(const record of [{exitCode:2,status:'completed',message:/退出码不一致.
     }finally{await h.dispose();}
   });
 
-test('T9 only wrapping text is normalized; a genuinely invalid field still gets one precise correction',async()=>{
+test('T9 an unknown evidence kind still gets one precise correction',async()=>{
   const p=plan();p.tasks=p.tasks.slice(0,1);let original:any;
   const h=await harness({plan:p,handler:async c=>{
     if(c.kind!=='review')return;c.ctx.emit('delta','（尾鳍啪嗒啪嗒）本鲸来复核……\n',undefined,'native');
     if(c.correction){assert.match(c.ctx.run.input,/只能是 command、quote、inspection 或 source/);return {...original,evidence:[{...original.evidence[0],kind:'inspection'}]};}
-    return original={...passing(c.material.task.completionCriteria),evidence:[{kind:'tool',description:'读取文件',result:'内容已核对',eventIds:[]}]};
+    return original={...passing(c.material.task.completionCriteria),evidence:[{kind:'invented-kind',description:'读取文件',result:'内容已核对',eventIds:[]}]};
   }});
   try{await h.confirm();const s=await h.wait(s=>s.rounds[0]?.status==='awaiting_acceptance');assert.equal(s.reviews[0].status,'passed');
     assert.equal(h.calls.filter(c=>c.correction).length,1);assert.equal(await h.original(),'old-a');

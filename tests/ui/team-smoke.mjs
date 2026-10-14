@@ -511,7 +511,7 @@ try {
   // The outcome note shows the answer and offers acceptance, sending back and a review by another member.
   const outcomeNote = (id, runId, extra) => page.evaluate(([id, runId, extra]) => {
     const s = window.__snapshot, threadId = s.room.currentThreadId, at = new Date().toISOString();
-    if (!s.runs.some(run => run.id === runId)) s.runs.push({ id: runId, sessionId: 'handed', projectId: 'p', provider: 'claude', revision: 1, status: 'ended', input: '第二版', createdAt: at, updatedAt: at, completedAt: at, delivery: 'confirmed', bootId: 'boot' });
+    if (!s.runs.some(run => run.id === runId)) s.runs.push({ id: runId, sessionId: 'handed', projectId: 'p', provider: 'claude', revision: 1, status: 'ended', inputPreview: '第二版', inputLength: 3, createdAt: at, updatedAt: at, completedAt: at, delivery: 'confirmed', bootId: 'boot' });
     window.__roomFull[threadId].push({ id, threadId, author: 'system', system: true, at, ...extra });
     s.room.messages = window.__roomFull[threadId].slice(-100);
     window.__listeners.forEach(listener => listener({ type: 'snapshot', snapshot: structuredClone(s) }));

@@ -18,7 +18,8 @@ import { acpPrompt } from './images';
 import { managedCatalogEnvironment } from '../executor-catalog';
 import { catalogEntry } from '../../shared/executor-catalog';
 import type {CatalogLoginState} from '../../shared/executor-catalog';
-import {runOfficialExecutorLogin} from '../official-login';
+import {officialExecutorLoginOutput,runOfficialExecutorLogin} from '../official-login';
+import {defaultBrowserLoginCommand,defaultBrowserLoginEnvironment} from '../login-browser';
 import {prepareManagedConfig} from './managed-config';
 import {cursorClientRequest} from './cursor-acp';
 import {acpChatLaunch} from './acp-chat';
@@ -166,18 +167,21 @@ export class AcpAdapter implements Adapter {
     }
   }
 
-  private async launch(env: NodeJS.ProcessEnv, cwd: string, register?: (child: ChildProcess) => void) {
+  private async launch(env: NodeJS.ProcessEnv, cwd: string, register?: (child: ChildProcess) => void, loginProgress?: (state:CatalogLoginState)=>void) {
     await prepareManagedConfig(this.executor,env);
     const program = resolveAcpProgram(this.executor.command, env);
     observeArguments(this.executor.args);
     const invocation=acpChatLaunch(this.executor,env,this.context);
-    const launch = prepareCliLaunch({ command: program.script ? process.execPath : program.file, prefix: program.script ? [program.file] : [], path: program.file }, invocation.args, invocation.env);
+    const command={ command: program.script ? process.execPath : program.file, prefix: program.script ? [program.file] : [], path: program.file };
+    const launch = prepareCliLaunch(loginProgress?defaultBrowserLoginCommand(command):command, invocation.args, loginProgress?defaultBrowserLoginEnvironment(invocation.env):invocation.env);
     this.stderr = ''; this.sessionId = undefined; this.sessionState = undefined; this.toolCalls.clear(); this.promptSent = false; this.acknowledged = false; this.replaying = false;
     await mkdir(cwd, { recursive: true });
     if(this.stopped)throw new Error('连接或登录已取消。');
     this.child = spawnOwned(launch.command, launch.args, { cwd, env: launch.env });
     register?.(this.child);
     const child=this.child;
+    const loginOutput=loginProgress&&this.executor.catalogId?officialExecutorLoginOutput(this.executor.catalogId,loginProgress):undefined;
+    if(loginOutput){child.stderr?.on('data',chunk=>loginOutput.write(chunk));child.stderr?.once('end',()=>loginOutput.end());}
     this.rpc=new AcpConnection(child,this.name,()=>this.stopped,
       packet=>this.incoming(packet),(_packet,method)=>{if(method==='session/prompt'){this.promptSent=false;}});
     this.rpc.onClose=()=>{if(this.child===child)this.reusable=false;};
@@ -238,6 +242,31 @@ export class AcpAdapter implements Adapter {
       if(login){
         const selected=catalogEntry(this.executor.catalogId!).authentication.find(item=>item.id===(methodId??this.executor.authentication));
         if(selected?.kind!=='browser')throw new Error('请选择官方账号登录。');
+        if(login.viaAcp){
+          // Cursor owns browser authorization in ACP. Its terminal login also waits
+          // for optional account/telemetry work; do not chain two login lifecycles.
+          let acceptingProgress=true,preparationExpired=false;
+          const preparationTimer=setTimeout(()=>{preparationExpired=true;void this.cleanup().catch(()=>{});},30_000);
+          try{
+            await this.launch(this.environment(env),this.home(env),undefined,state=>{
+              if(!acceptingProgress||this.stopped)return;
+              if(state.phase==='waiting')clearTimeout(preparationTimer);
+              progress?.(state);
+            });
+            const method=this.authMethods().find(item=>item.id===selected.id);
+            if(!method)throw new Error('官方程序未提供所选登录方式，请更新执行端后重试。');
+            await this.request('authenticate',{methodId:method.id},5*60_000);
+            acceptingProgress=false;
+            if(this.stopped)throw new Error('登录已取消。');
+            progress?.({phase:'checking',message:'官方授权已确认，正在检查连接…'});
+            // Engine checks session creation asynchronously; a slow model-list
+            // request must not keep the browser login button spinning.
+            return {method:selected.label};
+          }catch(error){
+            if(preparationExpired)throw new Error('官方授权页面在 30 秒内未准备好，请检查网络后重试。');
+            throw error;
+          }finally{acceptingProgress=false;clearTimeout(preparationTimer);}
+        }
         const environment=this.environment(env),home=this.home(env),program=resolveAcpProgram(this.executor.command,environment);
         await mkdir(home,{recursive:true});
         await prepareManagedConfig(this.executor,environment);
@@ -245,9 +274,10 @@ export class AcpAdapter implements Adapter {
         await runOfficialExecutorLogin(this.executor.catalogId!,{command:program.script?process.execPath:program.file,path:program.file,prefix:program.script?[program.file]:[]},login.args,environment,home,child=>{this.child=child;if(this.stopped)void stopOwned(child,1500);},progress);
         if(this.stopped)throw new Error('登录已取消。');
         await this.cleanup();
+        progress?.({phase:'checking',message:'官方授权已确认，正在检查连接…'});
         // A zero exit from a terminal helper is insufficient: check the actual ACP account.
         await this.launch(environment,home);
-        const method=this.authMethods()[0];
+        const method=this.authMethods().find(item=>item.id===login.authenticateAfter);
         if(login.authenticateAfter)await this.request('authenticate',{methodId:method?.id??login.authenticateAfter},30_000);
         const session=await this.request('session/new',{cwd:home,mcpServers:[]},60_000);
         if(!session?.sessionId)throw new Error('官方授权后仍未能创建会话，请重新登录。');

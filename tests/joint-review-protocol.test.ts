@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { jointCost } from '../src/shared/joint-review';
-import { validateAuthorResponse,validateJointOpinion,validateJointSummary,validateJointVerification } from '../src/shared/joint-review-protocol';
+import { retainJointText,assertJointMeaning,validateAuthorResponse,validateJointOpinion,validateJointSummary,validateJointVerification } from '../src/shared/joint-review-protocol';
 import type { ReviewFinding } from '../src/shared/project-flow';
 const finding:ReviewFinding={id:'f1',location:'文档结论',kind:'verified',severity:'blocking',evidence:'原稿缺少来源',request:'补上出处'};
 test('joint review baseline costs match the agreed proposal and artifact stages',()=>{
   assert.equal(jointCost(3,'proposal').baseCalls,7);assert.equal(jointCost(3,'artifact').baseCalls,5);assert.equal(jointCost(3,'answer').baseCalls,5);assert.equal(jointCost(3,'proposal',false).baseCalls,4);
 });
-test('joint opinions share finding validation and cannot manufacture a verified finding without evidence',()=>{
+test('joint opinions retain the member classification and flag unsupported claims without inventing evidence',()=>{
   const {id,...payload}=finding;
   assert.equal(validateJointOpinion({summary:'需补出处',findings:[payload],unverifiedItems:[]}).findings[0].severity,'blocking');
-  assert.throws(()=>validateJointOpinion({summary:'结论',findings:[{...payload,evidence:''}],unverifiedItems:[]}),/文字字段/);
+  const unsupported=validateJointOpinion({summary:'结论',findings:[{...payload,evidence:''}],unverifiedItems:[]});
+  assert.equal(unsupported.findings[0].kind,'verified');assert.equal(unsupported.findings[0].evidence,'');assert.match(unsupported.unverifiedItems.join(),/声称已证实但未提供依据/);
   assert.throws(()=>validateJointOpinion({summary:'结论',findings:[{...payload,severity:'urgent'}],unverifiedItems:[]}),/严重程度/);
 });
 test('optional user summaries retain the original findings and strict evidence contract',()=>{
@@ -19,7 +20,7 @@ test('optional user summaries retain the original findings and strict evidence c
   assert.equal(validateJointOpinion({...base,userSummary:' '}).userSummary,undefined);assert.equal(validateJointOpinion({...base,userSummary:'文'.repeat(2100)}).userSummary?.length,2000);
   assert.throws(()=>validateJointOpinion({...base,userSummary:{summary:'错误类型'}}),/文字字段/);
   assert.throws(()=>validateJointOpinion({...base,userSummary:'说明',invented:'字段'}),/不支持的字段/);
-  assert.throws(()=>validateJointOpinion({...base,userSummary:'说明',findings:[{...payload,evidence:''}]}),/文字字段/);
+  assert.match(validateJointOpinion({...base,userSummary:'说明',findings:[{...payload,evidence:''}]}).unverifiedItems.join(),/尚未核实/);
 });
 test('author replies cover every finding once and disputes require evidence; a new version cannot be invented',()=>{
   const response={findingId:'f1',stance:'agree',reason:'确实漏了',evidence:''};assert.equal(validateAuthorResponse({responses:[response]},[finding]).length,1);
@@ -29,7 +30,8 @@ test('author replies cover every finding once and disputes require evidence; a n
 });
 test('summary requires one disposition per finding and owned candidate and verification references',()=>{
   const base={summary:'需要补充',dispositions:[{findingId:'f1',action:'accept',reason:'出处缺失'}],disagreements:[],verificationRequests:[]};assert.equal(validateJointSummary(base,[finding],['s1']).dispositions.length,1);
-  assert.throws(()=>validateJointSummary({...base,dispositions:[]},[finding],[]),/每条问题/);
+  const incomplete=validateJointSummary({...base,dispositions:[]},[finding],[]);assert.equal(incomplete.dispositions[0].action,'defer');assert.ok(incomplete.replyNotes?.length);
+  assert.throws(()=>validateJointSummary({...base,dispositions:[...base.dispositions,...base.dispositions]},[finding],[]),/每条问题/);
   assert.throws(()=>validateJointSummary({...base,recommendedSlotId:'foreign'},[finding],['s1']),/本次独立/);
   assert.throws(()=>validateJointSummary({...base,verificationRequests:[{findingIds:['foreign'],instruction:'检查'}]},[finding],[]),/本次评审/);
 });
@@ -37,4 +39,13 @@ test('verification cannot claim confirmation without evidence or silently change
   assert.throws(()=>validateJointVerification({findingIds:['f1'],outcome:'refuted',evidence:[],summary:'没问题'},['f1']),/验证依据/);
   assert.throws(()=>validateJointVerification({findingIds:['f2'],outcome:'inconclusive',evidence:[],summary:'未知'},['f1']),/派发的问题/);
   assert.equal(validateJointVerification({findingIds:['f1'],outcome:'inconclusive',evidence:[],summary:'来源无法核对'},['f1']).outcome,'inconclusive');
+});
+
+
+test('retaining original prose does not allow altered recommendations, findings or verification outcomes',()=>{
+  const original={summary:'原结论',proposal:'原方案',recommendedSlotId:'second',findings:[finding],outcome:'inconclusive'};
+  for(const change of [{recommendedSlotId:'first'},{findings:[{...finding,severity:'optional'}]},{outcome:'confirmed'}]){
+    const corrected=retainJointText(original,{...original,summary:'润色结论',...change});assert.throws(()=>assertJointMeaning(original,corrected),/格式补正/);
+  }
+  const corrected=retainJointText(original,{...original,summary:'缩写',proposal:'重写'});assert.doesNotThrow(()=>assertJointMeaning(original,corrected));assert.equal((corrected as any).proposal,'原方案');
 });

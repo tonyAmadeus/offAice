@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { chromium, expect } from '@playwright/test';
 import { createServer } from '../../scripts/ui-test-server.mjs';
-import { Engine } from '../../src/backend/engine.ts';
+import { Engine } from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 
 const directory=await mkdtemp(path.join(os.tmpdir(),'AIROOM attention-ui-')),source=path.join(directory,'project');await mkdir(source);await writeFile(path.join(source,'file.txt'),'baseline');
 const output=path.resolve('.test-cache/ui-attention');await mkdir(output,{recursive:true});

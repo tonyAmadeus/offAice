@@ -1,4 +1,4 @@
-/** Top-level payload contract shared by prompt generation and validation; nested evidence stays strict. */
+/** Shared prompt/validation contract; spelling normalization never replaces semantic checks. */
 const schema=(required:string[],optional:string[]=[])=>({required,allowed:[...required,...optional]});
 const review=schema(['verdict','verificationComplete','criteriaResults','findings','evidence'],['previousFindingChecks','assessments','strengths']);
 const opinion=schema(['summary'],['findings','unverifiedItems','proposal','evidence','userSummary']);

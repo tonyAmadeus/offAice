@@ -12,7 +12,6 @@
 /* Scale the complete source image from its usual cover size, so shrinking can reveal the full artwork. */
 .portrait.adjusted img { position: absolute; width: calc(max(100cqw, 100cqh / var(--portrait-aspect)) * var(--portrait-scale)); height: auto; max-width: none; left: calc(50% + var(--px, 0) * 100%); top: calc(var(--portrait-y) + var(--py, 0) * 100%); translate: -50% calc(-1 * var(--portrait-y)); }
 .stage-portrait, .char-card-portrait, .card-preview-portrait { --portrait-y: 4%; }
-.user-message .message-label { gap: 6px; }
 
 /* Card gallery */
 .card-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
@@ -68,9 +67,6 @@
 .address-row strong { color: var(--m-ink); }
 .profile-actions { display: flex; justify-content: flex-end; }
 
-/* Welcome stage additions */
-.stage-card-edit { position: absolute; top: 10px; right: 10px; z-index: 2; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--r-md); background: rgb(255 255 255 / 80%); color: #5a4e45; box-shadow: var(--shadow-sm); opacity: 0; transition: opacity .15s; }
-.stage-card:hover .stage-card-edit, .stage-card-edit:focus-visible { opacity: 1; }
 .team-stage.many { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); max-width: 1180px; }
 /* As many columns as members (up to four), each the width a card had in the four-seat row. */
 @media (min-width: 1241px) { .team-stage:not(.many) { grid-template-columns: repeat(var(--stage-cols, 4), minmax(0, 1fr)); max-width: calc(var(--stage-cols, 4) * 251px + (var(--stage-cols, 4) - 1) * 18px); } }
@@ -174,8 +170,7 @@
 .composer-mode .segmented { padding: 2px; }
 .composer-mode .segmented button { padding: 3px 11px; font-size: var(--fs-sm); }
 .room .composer-bottom { flex-wrap: wrap; row-gap: 6px; }
-.room-rounds { display: inline-flex; align-items: center; gap: 6px; }
-.room-rounds select { padding: 3px 8px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: var(--surface); font-size: var(--fs-md); }
+
 /* Fixed-height composers: Enter sends, Shift + Enter adds a line, and a long draft scrolls inside. */
 .composer textarea { height: 114px; min-height: 0; max-height: none; resize: none; overflow-y: auto; }
 .room .composer textarea { height: 90px; }
@@ -218,19 +213,10 @@
 .frame-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: -4px; font-size: var(--fs-sm); color: var(--ink-3); }
 .frame-caption .link-button, .card-preview-avatar .link-button { font-size: var(--fs-sm); }
 .card-preview-avatar .link-button { align-self: flex-start; }
-.room-discussion-status { margin: 0 24px 12px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); font-size: var(--fs-md); }
-.room-discussion-status > div { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.room-discussion-status p { margin: 7px 0 0; }
-.room-discussion-status.phase-idle strong { color: #508064; }
-.room-discussion-status.phase-blocked strong, .room-discussion-status.phase-budget strong { color: #aa642f; }
-.room-discussion-budget { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--fs-sm); }
-.room-discussion-budget select { margin-left: 5px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 3px; background: var(--surface-2); color: inherit; }
+
 .room-hand-option { display: inline-flex; align-items: center; gap: 5px; }
 .room-hand-option input { accent-color: var(--accent); }
-.room-discussion-status > .room-hand-round { margin-top: 8px; gap: 6px; align-items: flex-start; }
-.room-hand-round > span:first-child { flex-basis: 100%; color: var(--ink-2); }
-.room-hand-vote { padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface); overflow-wrap: anywhere; max-width: 100%; }
-.room-hand-vote.vote-done { border: 1px solid var(--line); }
+
 .room-reply-note { display: block; margin: 6px 0; font-size: var(--fs-sm); color: var(--ink-3); }
 .room-reply-button { margin-top: 5px; font-size: var(--fs-sm); }
 
@@ -260,7 +246,7 @@
 /* Topics: summaries in the topic bar, the management panel and the new-topic dialog. */
 .room { position: relative; }
 .room-topic-bar { flex-wrap: wrap; }
-.topic-compress { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); }
+
 .topic-bar-summary { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
 .topic-bar-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
 .topic-bar-links:empty { display: none; }
@@ -450,8 +436,7 @@ button.room-system.link:hover { border-color: var(--ink-3); color: var(--ink); }
 .collaborator-check { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 999px; border: 1.5px solid var(--line-strong); color: #fff; }
 .collaborator-choice.selected .collaborator-check { border-color: var(--m); background: var(--m); }
 .lead-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; min-height: 30px; align-items: center; }
-.lead-choice { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 5px; border: 1.5px solid var(--line); border-radius: 999px; background: var(--surface); font: inherit; font-size: var(--fs-md); font-weight: 500; color: var(--ink); cursor: pointer; }
-.lead-choice.selected { border-color: var(--m); background: var(--m-soft); color: var(--m-ink); }
+
 /* Attachments: "+" in the composer, a tray of files about to be sent, and files on sent messages. */
 /* Composer tools share one round shape: attach, generate image. */
 .attach-button, .composer-tool { flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); transition: border-color .15s, color .15s, background .15s; }

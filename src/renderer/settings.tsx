@@ -94,6 +94,21 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
   }
   async function save() { setBusy(true); try { await saveConfiguration(); notify('设置已保存。新任务会使用当前配置。'); onClose(); } catch {} finally { setBusy(false); } }
   async function probe(provider?: ProviderId) { setChecking(provider ?? 'all'); try { await saveConfiguration(); await invoke('provider.probe', provider ? { provider } : {}); } catch {} finally { setChecking(null); } }
+  async function selectManualProvider(provider?: ProviderId) {
+    try {
+      if (provider && snapshot.removedProviders?.includes(provider)) await invoke('executor.restore',{id:provider});
+      setManualProvider(provider);
+    } catch {}
+  }
+  async function removeProvider(provider: ProviderId) {
+    if (!window.confirm(`删除「${PROVIDER_NAMES[provider]}」的连接？聊天记录、登录资料和已下载程序会保留，可以从清单或手动配置重新添加。`)) return;
+    setChecking(provider);
+    try {
+      await invoke('executor.delete',{id:provider},'执行端连接已删除。');
+      setSettings(previous=>({...previous,paths:{...previous.paths,[provider]:undefined}}));
+      if (manualProvider===provider) setManualProvider(undefined);
+    } catch {} finally { setChecking(null); }
+  }
   async function exportDiagnostics() {
     try {
       const result = await invoke<{ path?: string } | string>('diagnostics.export');
@@ -120,8 +135,8 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
           <ExecutorCatalog snapshot={snapshot} invoke={invoke} notify={notify} beforeOperation={saveConfiguration} onSelected={item=>{if(!item.provider.startsWith('acp-'))setSettings(previous=>({...previous,paths:{...previous.paths,[item.provider]:item.selectedPath}}));}} onNewMember={provider=>{setNewExecutor(provider);setEditOrigin('connections');setEditing('new');setTab('members');}}/>
           <div className="settings-section-heading"><h3>连接、模型与版本</h3><button className="button small secondary" disabled={Boolean(checking) || !snapshot.backendReady} onClick={() => void probe()}><RefreshCw size={13} className={checking ? 'spin' : ''} />检查全部</button></div>
           <p className="settings-description">按程序设置，使用同一个程序的成员共用登录和版本。</p>
-          <label className="field compact">手动配置本机执行端<select aria-label="手动配置本机执行端" value={manualProvider??''} onChange={event=>setManualProvider(event.target.value as ProviderId||undefined)}><option value="">选择要配置的程序</option>{PROVIDERS.map(provider=><option key={provider} value={provider}>{PROVIDER_NAMES[provider]}</option>)}</select></label>
-          {PROVIDERS.filter(provider=>snapshot.settings.paths[provider]||team.members.some(member=>member.executor===provider)||manualProvider===provider||provider==='deepseek'&&snapshot.deepseekKeyConfigured).map(provider => {
+          <label className="field compact">手动配置本机执行端<select aria-label="手动配置本机执行端" value={manualProvider??''} onChange={event=>void selectManualProvider(event.target.value as ProviderId||undefined)}><option value="">选择要配置的程序</option>{PROVIDERS.map(provider=><option key={provider} value={provider}>{PROVIDER_NAMES[provider]}</option>)}</select></label>
+          {PROVIDERS.filter(provider=>!snapshot.removedProviders?.includes(provider)&&(snapshot.settings.paths[provider]||team.members.some(member=>member.executor===provider)||manualProvider===provider||provider==='deepseek'&&snapshot.deepseekKeyConfigured)).map(provider => {
             const info = snapshot.providers.find(item => item.id === provider);
             const p = team.members.find(member=>member.executor===provider);
             return <section className={`provider-settings member-${provider}`} key={provider} data-provider={provider}>
@@ -129,6 +144,7 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
                 {p?<Avatar member={p} size={42} mood={runnable(info) ? 'resting' : info ? 'offline' : 'away'} />:<Cable size={24}/>}
                 <div><strong>{PROVIDER_NAMES[provider]} <small>{team.members.filter(member => member.executor === provider).map(member => member.name).join('、')}</small></strong><span className={runnable(info) ? 'ready-text' : ''}>{providerSummary(info)}{info?.version ? ` · ${versionText(info)}` : ''}</span></div>
                 <button className="button small quiet" disabled={Boolean(checking) || !snapshot.backendReady} onClick={() => void probe(provider)}>{checking === provider || checking === 'all' ? <LoaderCircle size={13} className="spin" /> : <RefreshCw size={13} />}检查</button>
+                {provider!=='deepseek'&&<button className="button small quiet danger" aria-label={`${PROVIDER_NAMES[provider]} 删除连接`} disabled={Boolean(checking)||!snapshot.backendReady||team.members.some(member=>member.executor===provider)} title={team.members.some(member=>member.executor===provider)?'先让使用它的人物改用其他执行端，或删除对应人物卡':undefined} onClick={()=>void removeProvider(provider)}><Trash2 size={12}/>删除连接</button>}
               </div>
               <p className="provider-detail">{connectionLabel(provider)}</p><p className="provider-detail">{info?.detail ?? '尚未检查本机可用性与认证方式。'}</p>
               {(provider==='codex'||provider==='dsh'||provider==='claude'&&settings.claudeAuthMode!=='api')&&<ProviderLogin provider={provider} available={snapshot.backendReady} invoke={invoke} notify={notify} beforeLogin={saveConfiguration}/>}
@@ -143,7 +159,7 @@ export function SettingsModal({ snapshot, invoke, onClose, notify, installs, onI
               </>}
               {provider === 'claude' && settings.claudeAuthMode!=='api' && snapshot.claudeTokenConfigured && <div className="token-login"><div className="token-login-heading"><strong>已有长期令牌（兼容保留）</strong><span className="ready-text">已保存</span></div>
                 <p className="provider-detail">此前保存的凭据继续保留。新增订阅登录使用官方 Claude Code 登录入口；也可以选择 API Key 登录。清除已有令牌后，通过官方程序重新登录。</p>
-                <div className="token-login-row"><button type="button" className="button small secondary" disabled={!snapshot.backendReady} onClick={() => void openTokenWindow()}><KeyRound size={12} />打开令牌窗口</button>
+                <div className="token-login-row"><button type="button" className="button small secondary" disabled={!snapshot.backendReady} onClick={() => void openTokenWindow()}><KeyRound size={12} />浏览器重新登录</button>
                   <input type="password" autoComplete="off" aria-label="Claude 长期令牌" value={claudeToken} onChange={event => setClaudeToken(event.target.value)} placeholder="粘贴 sk-ant- 开头的令牌" spellCheck={false} />
                   <button type="button" className="button small primary" disabled={!claudeToken.trim() || savingToken || !snapshot.backendReady} onClick={() => void saveClaudeToken(claudeToken.trim())}>保存令牌</button>
                   {snapshot.claudeTokenConfigured && <button type="button" className="button small quiet danger" disabled={savingToken || !snapshot.backendReady} onClick={() => { if (window.confirm('清除 Claude 长期令牌？之后需要重新登录 Claude。')) void saveClaudeToken(''); }}>清除令牌</button>}</div></div>}

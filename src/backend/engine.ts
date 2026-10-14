@@ -1,3 +1,4 @@
+import { formatCorrectionSummary } from "./format-corrections";
 import { executeRun, type RunExecutionActive } from './run-execution';
 import {logoutProvider} from './provider-logout';
 import { discussionCallLimits } from "../shared/discussion-budget";
@@ -10,9 +11,11 @@ import {
   newCompatibility,
   withCompatibility,
   currentIdentity,
-  observeProgram,
+  confirmProgram,
   observeAccount,
   readProgramIdentity,
+  setProgramFingerprintStore,
+  type ProgramFingerprintStore,
 } from "./compatibility";
 import {
   CATALOG_REVISION,
@@ -220,6 +223,24 @@ import {
 import { projectUndoInfo, undoWriteback } from "./workspace-writeback";
 
 const now = () => new Date().toISOString();
+const UNAVAILABLE_OPERATION = "这个操作当前不可用，请刷新工作台后重试。";
+/** Which domain handler owns each method prefix. */
+const INVOKE_DOMAINS: Record<string, "rooms" | "members" | "work" | "automation" | "data"> = {
+  room: "rooms", projectRoom: "rooms", desk: "rooms", report: "rooms", memory: "rooms", attachment: "rooms", attention: "rooms",
+  member: "members", catalog: "members", provider: "members", executor: "members", team: "members", persona: "members", profile: "members", network: "members",
+  project: "work", session: "work", run: "work", approval: "work", all: "work", workspace: "work", artifact: "work", collaboration: "work",
+  automation: "automation",
+  snapshot: "data", settings: "data", backup: "data", diagnostics: "data", internal: "data",
+};
+const ROOM_BUSY_SKIP =
+  "聊天室还在讨论、已被你暂停或有结果待核对，本次自动发言已跳过。";
+/** Idempotency receipts are replayed within moments; older ones only grow the database. */
+const RECEIPT_RETENTION = {
+  roundtable_requests: 300,
+  flow_requests: 300,
+  personal_read_tokens: 500,
+  format_corrections: 1000,
+};
 // The DeepSeek API stand-in is retired now that DSH runs on its own account; old records still render.
 const ids: ProviderId[] = ["codex", "claude", "dsh"];
 const RUN_STATUS_TEXT: Partial<Record<Run["status"], string>> = {
@@ -251,6 +272,7 @@ const bounded = (
 type Active = RunExecutionActive;
 export class Engine {
   readonly store: Store;
+  private fingerprints?: ProgramFingerprintStore;
   readonly bootId = randomUUID();
   settings: Settings;
   private attachments: EngineAttachments;
@@ -326,6 +348,7 @@ export class Engine {
   private dailyLife: DailyLife;
   private lifeRunning = false;
   private memberOperations = new Set<string>();
+  private removingExecutors = new Set<string>();
   private memberInstallations = new Map<string, MemberInstallation>();
   private acpLogins = new Set<string>();
   private executorLoginStates = new Map<string, CatalogLoginState>();
@@ -376,6 +399,14 @@ export class Engine {
       limit: timing?.runtimeLimit,
     });
     this.store = new Store(dataDirectory);
+    // Replay protection only needs recent request IDs; then reclaim the space deleted records left behind.
+    this.store.retainNewest(RECEIPT_RETENTION);
+    this.store.compact();
+    this.fingerprints = {
+      get: (file) => this.store.get("program_fingerprints", file),
+      put: (file, value) => this.store.put("program_fingerprints", file, value),
+    };
+    setProgramFingerprintStore(this.fingerprints);
     this.backups = new EngineBackups(
       dataDirectory,
       (directory, reason) => this.backupWriter(directory, reason),
@@ -1060,6 +1091,7 @@ export class Engine {
       });
     return {
       ...base,
+      removedProviders: ids.filter(id => !!this.store.get('removed_providers', id)),
       rooms: [
         ...(base.rooms ?? []),
         ...(this.memberWorkspaces?.overviews() ?? []),
@@ -1256,6 +1288,110 @@ export class Engine {
       ? createHash("sha256").update(JSON.stringify(member)).digest("hex")
       : undefined;
   }
+  /** An automatic speech waits for the room; it never interrupts a discussion, a pause or an unchecked result. */
+  private roomBusyForAutomation(previous: RoomState) {
+    return Boolean(
+      this.roomRunning ||
+        this.roomChanging ||
+        previous.active ||
+        (previous.discussion && previous.discussion.phase !== "idle"),
+    );
+  }
+  /** Holds the room for one automatic task, then restores the state it had before. */
+  private holdRoomFor(task: Promise<unknown>, previous: RoomState, life = false) {
+    const lifecycle = task
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        if (this.roomRunning === lifecycle) {
+          this.roomRunning = undefined;
+          if (life) this.lifeRunning = false;
+          if (!this.closed)
+            this.setRoomState({
+              ...previous,
+              active: false,
+              speaking: undefined,
+            });
+        }
+        this.flowTasks.delete(lifecycle);
+      });
+    this.roomRunning = lifecycle;
+    this.flowTasks.add(lifecycle);
+  }
+  /** One automatic room reply: send, show it speaking, wait, and settle the message. An unknown result is never resent. */
+  private async speakAutomatically(params: {
+    member: MemberProfile;
+    sessionId: string;
+    prompt: string;
+    origin: AutomaticOrigin;
+    messageId: string;
+    threadId: string;
+    afterSend?: () => void;
+  }): Promise<{ outcome: TimedResult; run?: Run; text?: string }> {
+    let runId: string | undefined;
+    try {
+      const sent = (await this.send(
+        params.sessionId,
+        params.prompt,
+        "message",
+        params.origin,
+      )) as { runId: string };
+      runId = sent.runId;
+      params.afterSend?.();
+      const message: RoomMessage = {
+        id: params.messageId,
+        author: params.member.id,
+        authorName: params.member.name,
+        threadId: params.threadId,
+        runId,
+        text: "",
+        at: now(),
+        status: "speaking",
+        automatic: params.origin,
+      };
+      this.roomMessage(message);
+      const reply = await this.waitForReply(runId, params.sessionId),
+        run = this.store.get<Run>("runs", runId)!;
+      const unknown = run.status === "unknown" || run.delivery === "unknown";
+      this.roomMessage({
+        ...message,
+        ...reply,
+        ...(unknown
+          ? {
+              text: "",
+              status: "failed" as const,
+              error: "本次自动发言结果待核对，未自动重发。",
+            }
+          : {}),
+        automatic: run.automatic,
+      });
+      return {
+        run,
+        text: reply.text,
+        outcome: {
+          status: unknown
+            ? "unknown"
+            : reply.status === "done"
+              ? "done"
+              : run.delivery === "withdrawn" || reply.status === "stopped"
+                ? "skipped"
+                : "failed",
+          reason: reply.error || run.error,
+          runId,
+        },
+      };
+    } catch (error) {
+      return {
+        outcome: {
+          status: error instanceof AutomaticDenied ? "skipped" : "failed",
+          reason: (error as Error).message,
+          runId,
+        },
+      };
+    }
+  }
   private async lifeSpeech(
     job: TimedJob,
     item: TimedOccurrence,
@@ -1272,17 +1408,8 @@ export class Engine {
       !this.automation.current(item)
     )
       return { status: "skipped", reason: "窗口已隐藏或自动功能已暂停。" };
-    if (
-      this.roomRunning ||
-      this.roomChanging ||
-      previous.active ||
-      (previous.discussion && previous.discussion.phase !== "idle")
-    )
-      return {
-        status: "skipped",
-        reason:
-          "聊天室还在讨论、已被你暂停或有结果待核对，本次自动发言已跳过。",
-      };
+    if (this.roomBusyForAutomation(previous))
+      return { status: "skipped", reason: ROOM_BUSY_SKIP };
     const denied = this.automaticBudget.reason(feature);
     if (denied) return { status: "skipped", reason: denied };
     const thread = this.roomStore.currentRoomThread();
@@ -1412,7 +1539,7 @@ export class Engine {
           jobId: job.id,
           occurrenceId: child.id,
         };
-        let outcome: TimedResult, runId: string | undefined;
+        let outcome: TimedResult;
         try {
           this.automaticAllowed(
             origin,
@@ -1441,60 +1568,26 @@ export class Engine {
                   this.automationNow(),
                   replyText,
                 );
-          const sent = (await this.send(
-            session.id,
+          const spoken = await this.speakAutomatically({
+            member,
+            sessionId: session.id,
             prompt,
-            "message",
             origin,
-          )) as { runId: string };
-          runId = sent.runId;
-          runIds.push(runId);
-          if (step === 0)
-            this.store.put("daily_life", feature, {
-              memberId: member.id,
-              at: now(),
-            });
-          const message: RoomMessage = {
-            id: `automatic-${child.id}`,
-            author: member.id,
-            authorName: member.name,
+            messageId: `automatic-${child.id}`,
             threadId: thread.id,
-            runId,
-            text: "",
-            at: now(),
-            status: "speaking",
-            automatic: origin,
-          };
-          this.roomMessage(message);
-          const reply = await this.waitForReply(runId, session.id),
-            run = this.store.get<Run>("runs", runId)!;
-          const unknown =
-            run.status === "unknown" || run.delivery === "unknown";
-          this.roomMessage({
-            ...message,
-            ...reply,
-            ...(unknown
-              ? {
-                  text: "",
-                  status: "failed" as const,
-                  error: "本次自动发言结果待核对，未自动重发。",
-                }
-              : {}),
-            automatic: run.automatic,
+            afterSend:
+              step === 0
+                ? () =>
+                    this.store.put("daily_life", feature, {
+                      memberId: member.id,
+                      at: now(),
+                    })
+                : undefined,
           });
-          replyText = reply.text;
-          outcome = {
-            status: unknown
-              ? "unknown"
-              : reply.status === "done"
-                ? "done"
-                : run.delivery === "withdrawn" || reply.status === "stopped"
-                  ? "skipped"
-                  : "failed",
-            reason: reply.error || run.error,
-            runId,
-          };
-          if (run.status === "rate_limited")
+          outcome = spoken.outcome;
+          if (outcome.runId) runIds.push(outcome.runId);
+          replyText = spoken.text;
+          if (spoken.run?.status === "rate_limited")
             this.automation.hold(
               job.id,
               "本次成员发言受限，请核对额度后恢复未来的触发。",
@@ -1503,7 +1596,6 @@ export class Engine {
           outcome = {
             status: error instanceof AutomaticDenied ? "skipped" : "failed",
             reason: (error as Error).message,
-            runId,
           };
         }
         this.store.put("timed_occurrences", child.id, {
@@ -1515,26 +1607,7 @@ export class Engine {
       }
       return { status: "done", runId: runIds.at(-1), runIds };
     });
-    const lifecycle = task
-      .then(
-        () => {},
-        () => {},
-      )
-      .finally(() => {
-        if (this.roomRunning === lifecycle) {
-          this.roomRunning = undefined;
-          this.lifeRunning = false;
-          if (!this.closed)
-            this.setRoomState({
-              ...previous,
-              active: false,
-              speaking: undefined,
-            });
-        }
-        this.flowTasks.delete(lifecycle);
-      });
-    this.roomRunning = lifecycle;
-    this.flowTasks.add(lifecycle);
+    this.holdRoomFor(task, previous, true);
     return task;
   }
   private async automaticSpeech(
@@ -1562,21 +1635,11 @@ export class Engine {
       return { status: "skipped", reason: (error as Error).message };
     }
     const previous = this.roomStore.roomState();
-    if (
-      this.roomRunning ||
-      this.roomChanging ||
-      previous.active ||
-      (previous.discussion && previous.discussion.phase !== "idle")
-    )
-      return {
-        status: "skipped",
-        reason:
-          "聊天室还在讨论、已被你暂停或有结果待核对，本次自动发言已跳过。",
-      };
+    if (this.roomBusyForAutomation(previous))
+      return { status: "skipped", reason: ROOM_BUSY_SKIP };
     this.roomStopping = false;
     this.setRoomState({ active: true, mode: "chat", speaking: member.id });
     const task = Promise.resolve().then(async (): Promise<TimedResult> => {
-      let runId: string | undefined;
       try {
         const session = await this.loungeSession(member),
           current = this.store.get<Session>("sessions", session.id)!;
@@ -1601,78 +1664,24 @@ export class Engine {
           )
           .join("\n");
         const prompt = `[AIROOM 主人已启用的定时发言]\n任务名称：${job.name}\n主人预先设置的要求：${action.text}\n这是一条定时发言，只回复一次，不继续调度其他成员。不要使用工具、读写文件或执行命令；不要声称做过没有记录的工作。\n近期聊天仅为参考：\n${context || "（暂无）"}`;
-        const sent = (await this.send(
-          session.id,
-          prompt,
-          "message",
-          origin,
-        )) as { runId: string };
-        runId = sent.runId;
-        const message: RoomMessage = {
-          id: `automatic-${item.id}`,
-          author: member.id,
-          authorName: member.name,
-          threadId: action.threadId,
-          runId,
-          text: "",
-          at: now(),
-          status: "speaking",
-          automatic: origin,
-        };
-        this.roomMessage(message);
-        const reply = await this.waitForReply(runId, session.id),
-          run = this.store.get<Run>("runs", runId)!;
-        const unknown = run.status === "unknown" || run.delivery === "unknown";
-        this.roomMessage({
-          ...message,
-          ...reply,
-          ...(unknown
-            ? {
-                text: "",
-                status: "failed" as const,
-                error: "本次自动发言结果待核对，未自动重发。",
-              }
-            : {}),
-          automatic: run.automatic,
-        });
-        return {
-          status: unknown
-            ? "unknown"
-            : reply.status === "done"
-              ? "done"
-              : run.delivery === "withdrawn" || reply.status === "stopped"
-                ? "skipped"
-                : "failed",
-          reason: reply.error || run.error,
-          runId,
-        };
+        return (
+          await this.speakAutomatically({
+            member,
+            sessionId: session.id,
+            prompt,
+            origin,
+            messageId: `automatic-${item.id}`,
+            threadId: action.threadId,
+          })
+        ).outcome;
       } catch (error) {
         return {
           status: error instanceof AutomaticDenied ? "skipped" : "failed",
           reason: (error as Error).message,
-          runId,
         };
       }
     });
-    const lifecycle = task
-      .then(
-        () => {},
-        () => {},
-      )
-      .finally(() => {
-        if (this.roomRunning === lifecycle) {
-          this.roomRunning = undefined;
-          if (!this.closed)
-            this.setRoomState({
-              ...previous,
-              active: false,
-              speaking: undefined,
-            });
-        }
-        this.flowTasks.delete(lifecycle);
-      });
-    this.roomRunning = lifecycle;
-    this.flowTasks.add(lifecycle);
+    this.holdRoomFor(task, previous);
     return task;
   }
   broadcast() {
@@ -1689,7 +1698,7 @@ export class Engine {
   }
   /** The built-in executors plus every program the user connected over ACP. */
   private executorIds(): ProviderId[] {
-    return [...ids, ...this.store.executors().map((item) => item.id)];
+    return [...ids.filter(id => !this.store.get('removed_providers', id)), ...this.store.executors().map((item) => item.id)];
   }
   private permissionsFor(
     id: ProviderId,
@@ -1778,7 +1787,7 @@ export class Engine {
     fidelity: TimelineEvent["fidelity"] = "native",
   ) {
     if (this.closed) return;
-    const event: TimelineEvent = redact({
+    const event = this.store.appendEvent({
       id: randomUUID(),
       runId: ctx.run.id,
       sessionId: ctx.session.id,
@@ -1789,7 +1798,6 @@ export class Engine {
       data,
       fidelity,
     });
-    this.store.appendEvent(event);
     this.projectFlow?.activity(event);
     this.push({ type: "event", event });
   }
@@ -2127,7 +2135,7 @@ export class Engine {
       const check = newCompatibility(executor.id, "candidate", this.settings);
       await withCompatibility(
         check,
-        async () => observeProgram(info.compatibility!.identity.path!),
+        () => confirmProgram(info.compatibility!.identity.path!),
         info.compatibility.identity,
       );
     }
@@ -2441,7 +2449,7 @@ export class Engine {
         const recheck = newCompatibility(member, "candidate", candidate);
         await withCompatibility(
           recheck,
-          async () => observeProgram(info.compatibility!.identity.path!),
+          () => confirmProgram(info.compatibility!.identity.path!),
           info.compatibility.identity,
         );
       }
@@ -2472,6 +2480,7 @@ export class Engine {
     this.cancelProbeRetry(member);
     this.probeRevisions.set(member, (this.probeRevisions.get(member) ?? 0) + 1);
     this.settings = candidate;
+    this.store.delete('removed_providers', member);
     this.store.put("settings", "main", candidate);
     this.publishProvider(info);
     await this.invalidateRuntimes(member);
@@ -2578,6 +2587,7 @@ export class Engine {
   }
   async probe(provider?: ProviderId, automaticRetry = false) {
     if (!this.alive || this.maintenance) return this.providers;
+    if (provider && this.store.get('removed_providers',provider)) throw new Error('这个执行端连接已删除，请先重新添加连接。');
     const empty=!this.store.members().length&&!this.store.executors().length&&!Object.values(this.settings.paths).some(Boolean)&&!this.key;
     await Promise.all(
       (provider ? [provider] : empty?[]:this.executorIds()).map(async (id) => {
@@ -2781,6 +2791,8 @@ export class Engine {
         "attention.list",
         "session.events",
         "session.approvals",
+        "run.inputs",
+        "internal.lookup",
         "backup.list",
         "backup.preview",
         "internal.backup.beforeRestore",
@@ -2788,6 +2800,24 @@ export class Engine {
       ].includes(method)
     )
       throw new Error("正在备份或恢复资料，请等完成后再操作。");
+    // Called without await so each handler runs synchronously up to its first await, exactly like one switch.
+    switch (INVOKE_DOMAINS[method.split(".")[0]]) {
+      case "rooms":
+        return this.invokeRooms(method, params);
+      case "members":
+        return this.invokeMembers(method, params);
+      case "work":
+        return this.invokeWork(method, params);
+      case "automation":
+        return this.invokeAutomation(method, params);
+      case "data":
+        return this.invokeData(method, params);
+      default:
+        throw new Error(UNAVAILABLE_OPERATION);
+    }
+  }
+  /** Rooms, desks, reports, discussion memory and attachments. */
+  private async invokeRooms(method: string, params: any): Promise<unknown> {
     switch (method) {
       case "desk.open": {
         const roomId: RoomId = `desk:${String(params.memberId)}`;
@@ -2838,30 +2868,114 @@ export class Engine {
         this.broadcast();
         return result;
       }
-      case "backup.list":
-        return new BackupRestorer(this.store.dataDirectory).list();
-      case "backup.preview":
-        return new BackupRestorer(this.store.dataDirectory).preview(
-          String(params.id),
+      case "projectRoom.ensure": {
+        if (this.maintenance)
+          throw new Error("正在备份或恢复资料，请等完成后再操作。");
+        const thread = this.store.ensureProjectRoom(String(params.projectId));
+        this.broadcast();
+        return { roomId: thread.roomId, threadId: thread.id };
+      }
+      case "room.get":
+        return this.store.roomView(this.roomId);
+      case "room.send":
+        return this.roomSend(params);
+      case "room.generateImage":
+        return this.roomGenerateImage(params);
+      case "room.stop":
+        return this.roomId.startsWith("roundtable:")
+          ? this.roundtables.interruptRoom(this.roomId)
+          : this.roomStop();
+      case "room.handoff":
+        return this.roomHandoff(params);
+      case "room.pause":
+        return this.discussion.pause();
+      case "room.end": {
+        const state = this.roomStore.roomState(),
+          d = state.discussion;
+        if (
+          state.mode !== "discuss" ||
+          !d ||
+          typeof params.discussionId !== "string" ||
+          params.discussionId !== d.id
+        )
+          throw new Error("讨论已切换，请刷新后再结束。");
+        if (d.phase === "idle") return { ended: true };
+        const running = this.roomRunning;
+        await this.roomStop();
+        await running;
+        return this.discussion.finishByUser(
+          params.acknowledgeUnknown === true,
+          params.discussionId,
         );
-      case "backup.create":
-        return this.createDataBackup("manual");
-      case "backup.delete":
-        if (params.confirm !== true) throw new Error("请先确认删除这份备份。");
-        return new BackupRestorer(this.store.dataDirectory).remove(
-          String(params.id),
+      }
+      case "room.resume":
+        return this.discussion.resume(params ?? {});
+      case "room.minutes":
+        return this.discussion.requestMinutes(params ?? {});
+      case "room.host":
+        return this.discussion.hostChoice(params ?? {});
+      case "room.react":
+        return this.roomReact(
+          String(params.messageId ?? ""),
+          String(params.emoji ?? ""),
         );
-      case "internal.restore.begin":
-        this.beginDataMaintenance();
-        return { ready: true };
-      case "internal.restore.cancel":
-        this.endDataMaintenance();
-        return { cancelled: true };
-      case "internal.backup.beforeRestore":
-        if (!this.maintenance) throw new Error("恢复前尚未暂停执行服务。");
-        return this.createDataBackup("before-restore");
-      case "snapshot":
-        return this.snapshot();
+      case "room.clear":
+        return this.roomClear();
+      case "room.uninherit":
+        return this.roomUninherit(String(params.threadId ?? ""));
+      case "memory.sources":
+        return memorySources(String(params.executor ?? ""));
+      case "memory.read":
+        return memoryCandidates(
+          String(params.executor ?? ""),
+          String(params.source ?? ""),
+        );
+      case "memory.accept":
+        return this.acceptMemories(params);
+      case "memory.dismiss": {
+        const thread = this.roomThread(String(params.threadId ?? ""));
+        if (thread.summary?.proposals) {
+          const { proposals: _handled, ...summary } = thread.summary;
+          this.roomStore.put("room_threads", thread.id, { ...thread, summary });
+          this.broadcast();
+        }
+        return { dismissed: true };
+      }
+      case "room.archive":
+        return this.roomArchive(
+          params.title,
+          Boolean(params.inherit),
+          params.memberId,
+          params.from == null ? undefined : String(params.from),
+        );
+      case "room.compress":
+        return this.roomCompress(
+          String(params.threadId ?? this.roomStore.currentRoomThread().id),
+          params.memberId,
+        );
+      case "room.rename":
+        return this.roomRename(String(params.threadId ?? ""), params.title);
+      case "room.delete":
+        return this.roomDelete(String(params.threadId ?? ""));
+      case "room.history":
+        return this.roomStore.roomHistory(
+          String(params.threadId ?? this.roomStore.currentRoomThread().id),
+          params.before == null ? undefined : String(params.before),
+          bounded(params.limit, 1, 200, 100),
+        );
+      case "room.export":
+        return this.roomExport(
+          String(params.threadId ?? this.roomStore.currentRoomThread().id),
+        );
+      case "attachment.import":
+        return importAttachments(this.store.dataDirectory, params.paths);
+      default:
+        throw new Error(UNAVAILABLE_OPERATION);
+    }
+  }
+  /** Members, executor programs, versions, accounts and connectivity. */
+  private async invokeMembers(method: string, params: any): Promise<unknown> {
+    switch (method) {
       case "catalog.list":
         return {
           revision: CATALOG_REVISION,
@@ -2951,72 +3065,9 @@ export class Engine {
           return { saved: !!Object.keys(secrets).length, executor };
         });
       }
-      case "automation.list":
-        return this.snapshot().automation;
-      case "automation.policy.save": {
-        const policies = AutomaticBudget.validate(params.policies),
-          dailyLife =
-            params.dailyLife === undefined
-              ? this.settings.dailyLife
-              : validateDailyLife(params.dailyLife);
-        this.settings = {
-          ...this.settings,
-          dailyLife,
-          automationPolicies: {
-            ...this.settings.automationPolicies,
-            ...policies,
-          },
-        };
-        this.store.put("settings", "main", this.settings);
-        this.dailyLife.sync();
-        this.broadcast();
-        return this.snapshot().automation;
-      }
-      case "automation.life.acknowledge": {
-        if (
-          !["daily-opening", "member-chat"].includes(params.feature) ||
-          params.acknowledgeUnknown !== true
-        )
-          throw new Error("请先核对上次发言和活动记录，再明确恢复未来的触发。");
-        this.automation.acknowledgeManaged(params.feature);
-        return this.snapshot().automation;
-      }
-      case "internal.room.opened": {
-        if (typeof params.visible !== "boolean")
-          throw new Error("窗口状态无效。");
-        if (this.alive) this.dailyLife.opened(params.visible);
-        return { received: this.alive };
-      }
-      case "automation.save":
-        return this.timedJob(params);
-      case "automation.remove":
-        this.automation.remove(String(params.id));
-        return { removed: true };
-      case "automation.pause":
-        this.automation.pause();
-        return { paused: true };
-      case "automation.resume": {
-        const marker = path.join(
-          this.store.dataDirectory,
-          AUTOMATION_PAUSE_FILE,
-        );
-        if (existsSync(marker)) unlinkSync(marker);
-        this.automation.resume();
-        return { resumed: true };
-      }
       case "provider.probe":
         await this.invalidateRuntimes(params.provider);
         return this.probe(params.provider);
-      case 'internal.provider.loginBegin': {
-        const id=String(params.provider);
-        if(!['claude','codex','dsh'].includes(id))throw new Error('执行端无效。');
-        if(this.active.size||this.memberOperations.has(id)||this.acpLogins.has(id))throw new Error('请先停止当前任务或等待下载完成，再登录。');
-        this.acpLogins.add(id);
-        try{await this.invalidateRuntimes(id as ProviderId,true);}catch(error){this.acpLogins.delete(id);throw error;}
-        return {started:true};
-      }
-      case 'internal.provider.loginEnd':
-        this.acpLogins.delete(String(params.provider));void this.schedule();return {ended:true};
       case 'provider.logout': {
         const id=String(params.provider) as ProviderId;
         if(!this.executorIds().includes(id))throw new Error('执行端不存在。');
@@ -3060,216 +3111,8 @@ export class Engine {
           throw new Error("这位成员程序尚未提供独立的额度刷新接口。");
         return this.refreshQuota(params.provider);
       }
-      case "internal.provider.invalidate": {
-        if (!params.provider || params.provider === "dsh")
-          this.balanceRevision++;
-        for (const id of params.provider
-          ? [params.provider]
-          : this.executorIds()) {
-          this.cancelProbeRetry(id);
-          this.probeRevisions.set(id, (this.probeRevisions.get(id) ?? 0) + 1);
-          this.store.put("quotas", id, {
-            provider: id,
-            windows: [],
-            checkedAt: now(),
-            source: "event",
-            accountStamp: this.quotaAccountStamp(id),
-          });
-        }
-        await this.invalidateRuntimes(params.provider, true);
-        this.broadcast();
-        return { invalidated: true };
-      }
       case "network.check":
         return checkNetwork(this.settings);
-      case "settings.save": {
-        if (this.active.size)
-          throw new Error("请先停止正在运行的成员，再修改执行端或网络设置");
-        const previous = this.settings;
-        const value = params.settings || params;
-        const next = {
-          ...this.settings,
-          ...value,
-          paths: { ...this.settings.paths, ...value.paths },
-          models: { ...this.settings.models, ...value.models },
-          efforts: { ...this.settings.efforts, ...value.efforts },
-        };
-        if (value.automationPolicies !== undefined)
-          next.automationPolicies = AutomaticBudget.validate({
-            ...this.settings.automationPolicies,
-            ...value.automationPolicies,
-          });
-        if (value.dailyLife !== undefined)
-          next.dailyLife = validateDailyLife(value.dailyLife);
-        if (value.discussionCallLimits !== undefined)
-          next.discussionCallLimits = discussionCallLimits(
-            value.discussionCallLimits,
-          );
-        if (
-          !["official", "npmmirror"].includes(next.npmRegistry ?? "official") ||
-          !["bundled", "local"].includes(next.nodeRuntime ?? "bundled") ||
-          !["subscription", "api"].includes(
-            next.claudeAuthMode ?? "subscription",
-          )
-        )
-          throw new Error("下载源、运行环境或登录方式无效。");
-        if (!["tun", "proxy"].includes(next.networkMode))
-          throw new Error("网络模式无效，请在设置里重新选择网络连接方式。");
-        if (
-          !Number.isInteger(next.maxParallel) ||
-          next.maxParallel < 1 ||
-          next.maxParallel > 8
-        )
-          throw new Error("同时运行数量应为 1–8");
-        next.maxRunMinutes = bounded(
-          next.maxRunMinutes,
-          1,
-          1440,
-          DEFAULT_SETTINGS.maxRunMinutes,
-        );
-        next.deepseekMaxRequests = bounded(
-          next.deepseekMaxRequests,
-          1,
-          200,
-          DEFAULT_SETTINGS.deepseekMaxRequests,
-        );
-        next.permissions = normalizePermissions(next.permissions);
-        next.memberPermissions = normalizeMemberPermissions(next.memberPermissions, new Set(this.store.members().map(member => member.id)));
-        if (typeof next.defaultAutoApprove !== "boolean")
-          throw new Error("新工作会话自动批准设置无效");
-        next.stopTimeoutMs = Math.max(
-          1000,
-          Math.min(Number(next.stopTimeoutMs) || 10000, 60000),
-        );
-        buildEnvironment(next);
-        // Model/effort choices change the next run, not the last observed account connection.
-        const affected = this.executorIds().filter(
-          (id) =>
-            this.settings.nodeRuntime !== next.nodeRuntime ||
-            (id === "claude" &&
-              this.settings.claudeAuthMode !== next.claudeAuthMode) ||
-            this.settings.networkMode !== next.networkMode ||
-            this.settings.proxyUrl !== next.proxyUrl ||
-            this.settings.paths[id] !== next.paths[id] ||
-            (id !== "deepseek" &&
-              JSON.stringify(this.settings.permissions[id]) !==
-                JSON.stringify(next.permissions[id])) ||
-            (id === "dsh" &&
-              (this.settings.dshProfile !== next.dshProfile ||
-                this.settings.deepseekBaseUrl !== next.deepseekBaseUrl)) ||
-            (id === "deepseek" &&
-              (this.settings.deepseekBaseUrl !== next.deepseekBaseUrl ||
-                this.settings.deepseekEnabled !== next.deepseekEnabled)),
-        );
-        const runtimeAffected = this.executorIds().filter(
-          (id) =>
-            affected.includes(id) ||
-            this.settings.models[id] !== next.models[id] ||
-            this.settings.efforts[id] !== next.efforts[id] ||
-            this.store.members().some(member => member.executor === id && JSON.stringify(this.settings.memberPermissions?.[member.id]) !== JSON.stringify(next.memberPermissions?.[member.id])),
-        );
-        // Retire all affected idle runtimes together, and do not persist a settings
-        // change whose native cleanup failed. Healthy cleanup never waits in series.
-        if (runtimeAffected.length) {
-          invalidateClaudeChecks();
-          const providers = new Set(runtimeAffected);
-          await this.roomRuntimes.invalidate((key) => {
-            const provider = this.store.get<Session>("sessions", key)?.provider;
-            return Boolean(provider && providers.has(provider));
-          });
-        }
-        if (this.active.size || this.settings !== previous)
-          throw new Error("保存期间任务或配置发生变化，已保留最新设置，请重试。");
-        this.settings = next;
-        this.store.put("settings", "main", next);
-        for (const executor of this.store.executors()) {
-          const permissions = next.permissions[executor.id];
-          if (permissions && JSON.stringify(permissions) !== JSON.stringify(executor.permissions))
-            this.store.put("executors", executor.id, { ...executor, permissions });
-        }
-        this.dailyLife.sync();
-        this.providers = this.providers.map((info) =>
-          affected.includes(info.id) ? { ...info, stale: true } : info,
-        );
-        for (const id of affected) {
-          this.probeRevisions.set(id, (this.probeRevisions.get(id) ?? 0) + 1);
-          const info = this.providers.find((info) => info.id === id);
-          if (info) this.store.put("providers", id, info);
-        }
-        this.broadcast();
-        for (const id of affected) void this.probe(id).catch(() => {});
-        return next;
-      }
-      case "project.openPath":
-        return new RoundResultReader(this.store).openPath(params);
-      case "project.create": {
-        // A relative path would resolve against the app install directory, never the user's intent.
-        const requested = String(params.directory || "").trim();
-        if (!path.isAbsolute(requested))
-          throw new Error(
-            "请填写项目文件夹的完整路径，例如 C:\\Users\\你\\Desktop\\项目",
-          );
-        const directory = path.resolve(requested);
-        const info = await stat(directory).catch(() => undefined);
-        if (!info?.isDirectory())
-          throw new Error("找不到这个文件夹，请检查路径");
-        const project = this.projectTree.create(directory, params);
-        this.broadcast();
-        return project;
-      }
-      case "project.move": {
-        const project = this.projectTree.move(params);
-        this.broadcast();
-        return project;
-      }
-      case "session.create":
-        return this.createSession(
-          params.projectId,
-          params.provider,
-          params.title,
-          params.writeMode,
-          params.memberId ? String(params.memberId) : undefined,
-        );
-      case "session.approvals": {
-        // Revoke or grant session-level auto-approval; takes effect on the next request.
-        const session = this.require<Session>(
-          "sessions",
-          String(params.sessionId),
-        );
-        const next = {
-          ...session,
-          ...(typeof params.autoApprove === "boolean"
-            ? { autoApprove: params.autoApprove }
-            : {}),
-          ...(params.clearRules ? { approvalRules: [] } : {}),
-        };
-        this.store.put("sessions", session.id, next);
-        this.broadcast();
-        await this.roomRuntimes.closeSession(session.id);
-        // Codex's `never` policy is fixed for an active turn. Stop it when revoking automatic approval.
-        const running = [...this.active.values()].find(
-          (active) => active.ctx.session.id === session.id,
-        );
-        if (
-          session.autoApprove &&
-          next.autoApprove === false &&
-          running &&
-          session.provider === "codex" &&
-          running.ctx.session.writeMode &&
-          running.ctx.settings.permissions.codex.commands === "auto" &&
-          running.ctx.settings.permissions.codex.fileScope === "any"
-        ) {
-          this.emit(
-            running.ctx,
-            "status",
-            "已关闭会话自动批准，停止当前 Codex 轮次；下一轮按成员权限重新启动。",
-            undefined,
-            "derived",
-          );
-          await this.stopRun(running.ctx.run.id);
-        }
-        return next;
-      }
       case "member.versions":
         return this.memberVersions(params.provider, !!params.checkLatest);
       case "member.installation":
@@ -3396,6 +3239,446 @@ export class Engine {
           });
           return this.memberVersions(member, false);
         });
+      }
+      case "member.stop.preview":
+        return this.memberStopPreview(String(params.memberId));
+      case "member.stop":
+        return this.stopMember(params);
+      case "team.save": {
+        // A card keeps its identity; changing its executor only affects new contexts.
+        const members = this.store.members();
+        const given = params.member ?? {};
+        const existing = given.id
+          ? members.find((member) => member.id === given.id)
+          : undefined;
+        const addingTemplate=params.addTemplate===true&&BUILTIN_MEMBERS.some(member=>member.id===given.id)&&!this.store.get('removed_members',given.id);
+        if(params.addTemplate===true&&existing)throw new Error('这张模板人物卡已添加，请刷新后编辑已有人物。');
+        if (given.id && !existing && !addingTemplate)
+          throw new Error("这位成员不存在，请刷新工作台");
+        const card = normalizeMember(
+          given,
+          existing,
+          existing ? undefined : `m-${randomUUID().slice(0, 8)}`,
+        );
+        if(this.store.get('removed_providers',card.executor))throw new Error('这个执行端连接已删除，请先在连接与版本中重新添加。');
+        if(this.removingExecutors.has(card.executor))throw new Error('该执行端正在删除连接，请完成后再保存人物。');
+        if (
+          isAcpId(card.executor) &&
+          !this.store.get("executors", card.executor)
+        )
+          throw new Error("请先保存这个 AI 程序的连接设置");
+        if (!existing && members.length >= 16)
+          throw new Error("团队最多 16 位成员");
+        if(existing && card.executor !== existing.executor) {
+          if(this.active.size)throw new Error('请先停止当前任务，再更换人物绑定的执行端。');
+          if(this.store.list<import('../shared/project-flow').ProjectFlow>('project_flows').some(flow=>flow.memberIds?.includes(card.id)&&!['completed','cancelled'].includes(flow.status)))throw new Error('请先结束项目流程，再更换人物绑定的执行端。');
+          card.model=undefined;card.effort=undefined;
+        }
+        await this.roomRuntimes.invalidate(
+          (key) =>
+            (this.store.get<Session>("sessions", key)?.memberId ??
+              this.store.get<Session>("sessions", key)?.provider) === card.id,
+        );
+        if(existing&&card.executor!==existing.executor){
+          if(this.active.size||this.store.members().find(member=>member.id===card.id)?.executor!==existing.executor)throw new Error('成员任务或绑定已变化，请停止任务并刷新后重试。');
+          this.store.transaction(()=>{
+            for(const session of this.store.list<Session>('sessions').filter(session=>(session.memberId??session.provider)===card.id&&!session.flowId)){
+              const config=this.runConfiguration(session);
+              this.store.put('sessions',session.id,{...session,model:session.model??config.model,effort:session.effort??config.effort});
+            }
+            for(const project of this.store.list<Project>('projects').filter(project=>project.memberConfigs?.[card.id])){
+              const memberConfigs={...project.memberConfigs};delete memberConfigs[card.id];
+              this.store.put('projects',project.id,{...project,memberConfigs,memberConfigRevision:(project.memberConfigRevision??0)+1});
+            }
+            this.store.put('members',card.id,card);
+          });
+        }else this.store.put('members',card.id,card);
+        this.memberWorkspaces.folder(card.id,true);this.memberWorkspaces.ensureMember(card.id);
+        this.broadcast();
+        return card;
+      }
+      case "executor.save": {
+        const given = params.executor ?? {};
+        const existing = given.id
+          ? this.store.get<AcpExecutor>("executors", String(given.id))
+          : undefined;
+        if (given.id && !existing)
+          throw new Error("这个外接程序不存在，请刷新工作台");
+        if (given.id && this.acpLogins.has(String(given.id)))
+          throw new Error("请完成或取消登录后再修改连接。");
+        if (!existing && this.store.executors().length >= 12)
+          throw new Error("最多接入 12 个外接程序");
+        const executor = normalizeExecutor(
+          given,
+          existing ? { ...existing, permissions: this.permissionsFor(existing.id, this.settings) } : undefined,
+          existing
+            ? undefined
+            : (`acp-${randomUUID().replace(/-/g, "").slice(0, 12)}` as AcpExecutorId),
+        );
+        // Secret values never reach the database or a snapshot, even when sent as ordinary variables.
+        const previous = this.acpSecrets.get(executor.id) ?? {},
+          secrets: Record<string, string> = {};
+        for (const [key, value] of Object.entries(
+          params.secrets && typeof params.secrets === "object"
+            ? params.secrets
+            : {},
+        ))
+          if (
+            isSecretName(key) &&
+            /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key) &&
+            typeof value === "string" &&
+            value
+          )
+            secrets[key] = value.slice(0, 4096);
+        for (const key of Object.keys(executor.env))
+          if (isSecretName(key)) {
+            const value = executor.env[key];
+            delete executor.env[key];
+            const resolved =
+              value === SECRET_PLACEHOLDER ? previous[key] : value;
+            if (resolved) secrets[key] = resolved;
+          }
+        for (const value of Object.values(secrets)) registerSecret(value);
+        executor.secretKeys = Object.keys(secrets).sort();
+        this.acpSecrets.set(executor.id, secrets);
+        this.store.put("executors", executor.id, executor);
+        this.settings = { ...this.settings, permissions: { ...this.settings.permissions, [executor.id]: executor.permissions } };
+        this.store.put("settings", "main", this.settings);
+        rememberExecutors(this.store.executors());
+        await this.invalidateRuntimes(executor.id);
+        const known = this.providers.find((info) => info.id === executor.id);
+        if (known)
+          this.publishProvider({ ...known, name: executor.name, stale: true });
+        this.broadcast();
+        void this.probe(executor.id).catch(() => {});
+        return executor;
+      }
+      case 'executor.restore': {
+        const id=String(params.id) as ProviderId;
+        if (!['codex','claude','dsh'].includes(id)) throw new Error('所选内置执行端不存在。');
+        this.store.delete('removed_providers', id);
+        this.broadcast();
+        return { restored:true };
+      }
+      case "executor.delete": {
+        const id = String(params.id);
+        const builtin=['codex','claude','dsh'].includes(id);
+        if (!builtin && (!isAcpId(id) || !this.store.get("executors", id)))
+          throw new Error("这个执行端不存在");
+        return this.memberOperation(id, async () => {
+        this.removingExecutors.add(id);
+        try {
+        if (this.acpLogins.has(id))
+          throw new Error("请完成或取消登录后再删除连接。");
+        const users = this.store
+          .members()
+          .filter((member) => member.executor === id);
+        if (users.length)
+          throw new Error(
+            `还有成员在使用它：${users.map((member) => member.name).join("、")}`,
+          );
+        for (const session of this.store
+          .list<Session>("sessions")
+          .filter((item) => item.provider === id))
+          this.requireIdle(session.id, "删除外接程序");
+        await this.invalidateRuntimes(id as ProviderId);
+        if (builtin) {
+          const provider=id as ProviderId,paths={...this.settings.paths};
+          delete paths[provider];
+          this.settings={...this.settings,paths};
+          this.store.put('settings','main',this.settings);
+          this.cancelProbeRetry(provider);
+          this.probeRevisions.set(provider,(this.probeRevisions.get(provider)??0)+1);
+          this.store.put('removed_providers',provider,{id:provider,at:now()});
+          this.store.delete('providers',provider);
+          this.providers=this.providers.filter(info=>info.id!==provider);
+        } else this.removeExecutor(id as AcpExecutorId);
+        this.broadcast();
+        return { deleted: true };
+        } finally { this.removingExecutors.delete(id); }
+        });
+      }
+      case "executor.authenticate": {
+        const executor = this.require<AcpExecutor>(
+          "executors",
+          String(params.id),
+        );
+        if (this.active.size || this.memberOperations.has(executor.id))
+          throw new Error("请先等待当前任务或下载完成，再登录执行端。");
+        if (this.acpLogins.has(executor.id))
+          throw new Error("登录正在进行，请在已打开的页面里完成");
+        const adapter = this.externalAdapter(executor);
+        this.acpLogins.add(executor.id);
+        this.executorLoginAdapters.set(executor.id, adapter);
+        this.executorLoginStates.set(executor.id, {
+          phase: "starting",
+          message: "正在启动官方登录…",
+        });
+        let authorized = false;
+        try {
+          await this.invalidateRuntimes(executor.id, true);
+          const result = await adapter.authenticate(
+            buildEnvironment(this.settings),
+            params.methodId == null ? undefined : String(params.methodId),
+            (state) => {
+              if (
+                this.executorLoginStates.get(executor.id)?.phase !== "cancelled"
+              ) {
+                this.executorLoginStates.set(executor.id, state);
+                this.push({ type: "executor-login", id: executor.id, state });
+              }
+            },
+          );
+          if (this.executorLoginStates.get(executor.id)?.phase === "cancelled")
+            throw new Error("登录已取消。");
+          authorized = true;
+          this.executorLoginStates.set(executor.id, {
+            phase: "completed",
+            message: "官方授权已完成，正在检查连接。",
+          });
+          return {
+            detail: `${executor.name} 已完成登录（${result.method}）。`,
+          };
+        } catch (error) {
+          if (this.executorLoginStates.get(executor.id)?.phase !== "cancelled")
+            this.executorLoginStates.set(executor.id, {
+              phase: "failed",
+              message: executor.catalogId === "zcode" && error instanceof Error
+                ? String(redact(error.message)).slice(0,400)
+                : "官方登录没有完成，请重试或检查网络。",
+            });
+          throw error;
+        } finally {
+          const completed=this.executorLoginStates.get(executor.id);
+          if (
+            this.alive && authorized &&
+            this.executorLoginStates.get(executor.id)?.phase !== "cancelled"
+          ) {
+            const check=this.probe(executor.id).then(()=>{
+              if(!this.alive||this.executorLoginStates.get(executor.id)!==completed)return;
+              const info=this.providers.find(item=>item.id===executor.id);
+              const state:CatalogLoginState={phase:'completed',message:info?.available?'官方授权已完成，连接检查通过。':`官方授权已完成，连接检查未通过：${info?.detail||'请重新检查成员连接。'}`};
+              this.executorLoginStates.set(executor.id,state);this.push({type:'executor-login',id:executor.id,state});
+            }).catch(()=>{});
+            this.loginChecks.add(check);
+            void check.finally(()=>this.loginChecks.delete(check));
+          }
+          this.acpLogins.delete(executor.id);
+          this.executorLoginAdapters.delete(executor.id);
+          if (this.alive) void this.schedule();
+        }
+      }
+      case "executor.loginStatus":
+        return this.executorLoginStates.get(String(params.id));
+      case "executor.cancelLogin": {
+        const id = String(params.id),
+          adapter = this.executorLoginAdapters.get(id);
+        if (adapter) {
+          this.executorLoginStates.set(id, {
+            phase: "cancelled",
+            message: "登录已取消。",
+          });
+          await adapter.stop();
+        }
+        return { cancelled: !!adapter };
+      }
+      case "team.visibility": {
+        const member = this.store
+          .members()
+          .find((item) => item.id === String(params.id));
+        if (!member) throw new Error("这位成员不存在");
+        if (typeof params.hidden !== "boolean")
+          throw new Error("请选择显示或隐藏人物卡");
+        const card = { ...member, cardHidden: params.hidden };
+        this.store.put("members", member.id, card);
+        // Visibility never invalidates a native context or stops a connection/turn.
+        this.broadcast();
+        return card;
+      }
+      case "team.delete": {
+        const member = this.store
+          .members()
+          .find((item) => item.id === String(params.id));
+        if (!member) throw new Error("这位成员不存在");
+        if (params.folderChoice !== undefined && params.folderChoice !== "keep")
+          throw new Error("删除人物卡会保留个人文件夹和成果，不能同时删除文件");
+        const sessions = this.store
+          .list<Session>("sessions")
+          .filter(
+            (session) => (session.memberId ?? session.provider) === member.id,
+          );
+        for (const session of sessions)
+          this.requireIdle(session.id, "删除成员");
+        const folder = this.memberWorkspaces.preserveMemberFolder(member.id);
+        const {
+          id,
+          executor,
+          name,
+          color,
+          portrait,
+          avatar,
+          portraitScale,
+          portraitOffset,
+          face,
+          avatarFace,
+          templateId,
+          builtIn,
+        } = member;
+        // Retain only attribution for history. Sessions, native IDs, outputs and shared executors stay intact.
+        this.store.transaction(() => {
+          this.store.put("removed_members", id, {
+            id,
+            executor,
+            name,
+            color,
+            portrait,
+            avatar,
+            portraitScale,
+            portraitOffset,
+            face,
+            avatarFace,
+            templateId,
+            builtIn,
+          });
+          this.store.delete("members", id);
+          const overrides = { ...this.settings.memberPermissions };
+          delete overrides[id];
+          this.settings = { ...this.settings, memberPermissions: overrides };
+          this.store.put("settings", "main", this.settings);
+          for (const project of this.store
+            .list<Project>("projects")
+            .filter(
+              (project) =>
+                !project.kind &&
+                (project.memberIds?.includes(id) ||
+                  project.memberConfigs?.[id]),
+            )) {
+            const configs = { ...project.memberConfigs };
+            delete configs[id];
+            this.store.put("projects", project.id, {
+              ...project,
+              memberIds: project.memberIds?.filter((value) => value !== id),
+              memberConfigs: configs,
+            });
+          }
+        });
+        const sessionIds = new Set(sessions.map((session) => session.id));
+        await this.roomRuntimes.invalidate((key) => sessionIds.has(key));
+        this.broadcast();
+        return { deleted: true, sessions: sessions.length, folder };
+      }
+      case "team.reset": {
+        const member = BUILTIN_MEMBERS.find(
+          (item) => item.id === String(params.id),
+        );
+        if (!member) throw new Error("只有内置成员可以恢复默认资料");
+        const current = this.store
+          .members()
+          .find((item) => item.id === member.id);
+        if (!current) throw new Error("这张人物卡已删除，请添加新成员");
+        this.store.put("members", member.id, { ...member, executor:current.executor, cardHidden:current.cardHidden });
+        await this.roomRuntimes.invalidate(
+          (key) =>
+            (this.store.get<Session>("sessions", key)?.memberId ??
+              this.store.get<Session>("sessions", key)?.provider) === member.id,
+        );
+        this.broadcast();
+        return this.store.members().find((item) => item.id === member.id);
+      }
+      case "profile.save": {
+        const given = params.profile ?? {};
+        const name =
+          typeof given.name === "string" ? given.name.trim().slice(0, 40) : "";
+        if (!name) throw new Error("名字不能为空");
+        const avatar =
+          typeof given.avatar === "string" &&
+          /^[a-f0-9-]{8,64}\.(png|jpe?g|webp|gif)$/i.test(given.avatar)
+            ? given.avatar
+            : undefined;
+        const profile: UserProfile = { name, ...(avatar ? { avatar } : {}) };
+        this.store.put("profile", "main", profile);
+        await this.roomRuntimes.invalidate();
+        this.broadcast();
+        return profile;
+      }
+      case "persona.import":
+        return this.importPersona(String(params.executor));
+      default:
+        throw new Error(UNAVAILABLE_OPERATION);
+    }
+  }
+  /** Projects, sessions, runs, approvals, work copies and legacy collaborations. */
+  private async invokeWork(method: string, params: any): Promise<unknown> {
+    switch (method) {
+      case "project.openPath":
+        return new RoundResultReader(this.store).openPath(params);
+      case "project.create": {
+        // A relative path would resolve against the app install directory, never the user's intent.
+        const requested = String(params.directory || "").trim();
+        if (!path.isAbsolute(requested))
+          throw new Error(
+            "请填写项目文件夹的完整路径，例如 C:\\Users\\你\\Desktop\\项目",
+          );
+        const directory = path.resolve(requested);
+        const info = await stat(directory).catch(() => undefined);
+        if (!info?.isDirectory())
+          throw new Error("找不到这个文件夹，请检查路径");
+        const project = this.projectTree.create(directory, params);
+        this.broadcast();
+        return project;
+      }
+      case "project.move": {
+        const project = this.projectTree.move(params);
+        this.broadcast();
+        return project;
+      }
+      case "session.create":
+        return this.createSession(
+          params.projectId,
+          params.provider,
+          params.title,
+          params.writeMode,
+          params.memberId ? String(params.memberId) : undefined,
+        );
+      case "session.approvals": {
+        // Revoke or grant session-level auto-approval; takes effect on the next request.
+        const session = this.require<Session>(
+          "sessions",
+          String(params.sessionId),
+        );
+        const next = {
+          ...session,
+          ...(typeof params.autoApprove === "boolean"
+            ? { autoApprove: params.autoApprove }
+            : {}),
+          ...(params.clearRules ? { approvalRules: [] } : {}),
+        };
+        this.store.put("sessions", session.id, next);
+        this.broadcast();
+        await this.roomRuntimes.closeSession(session.id);
+        // Codex's `never` policy is fixed for an active turn. Stop it when revoking automatic approval.
+        const running = [...this.active.values()].find(
+          (active) => active.ctx.session.id === session.id,
+        );
+        if (
+          session.autoApprove &&
+          next.autoApprove === false &&
+          running &&
+          session.provider === "codex" &&
+          running.ctx.session.writeMode &&
+          running.ctx.settings.permissions.codex.commands === "auto" &&
+          running.ctx.settings.permissions.codex.fileScope === "any"
+        ) {
+          this.emit(
+            running.ctx,
+            "status",
+            "已关闭会话自动批准，停止当前 Codex 轮次；下一轮按成员权限重新启动。",
+            undefined,
+            "derived",
+          );
+          await this.stopRun(running.ctx.run.id);
+        }
+        return next;
       }
       case "session.update": {
         const result = this.updateSession(String(params.sessionId), params);
@@ -3628,446 +3911,10 @@ export class Engine {
           String(params.runId),
           params.restoreUnchanged === true,
         );
-      case "member.stop.preview":
-        return this.memberStopPreview(String(params.memberId));
-      case "member.stop":
-        return this.stopMember(params);
-      case "team.save": {
-        // A card keeps its identity; changing its executor only affects new contexts.
-        const members = this.store.members();
-        const given = params.member ?? {};
-        const existing = given.id
-          ? members.find((member) => member.id === given.id)
-          : undefined;
-        const addingTemplate=params.addTemplate===true&&BUILTIN_MEMBERS.some(member=>member.id===given.id)&&!this.store.get('removed_members',given.id);
-        if(params.addTemplate===true&&existing)throw new Error('这张模板人物卡已添加，请刷新后编辑已有人物。');
-        if (given.id && !existing && !addingTemplate)
-          throw new Error("这位成员不存在，请刷新工作台");
-        const card = normalizeMember(
-          given,
-          existing,
-          existing ? undefined : `m-${randomUUID().slice(0, 8)}`,
-        );
-        if (
-          isAcpId(card.executor) &&
-          !this.store.get("executors", card.executor)
-        )
-          throw new Error("请先保存这个 AI 程序的连接设置");
-        if (!existing && members.length >= 16)
-          throw new Error("团队最多 16 位成员");
-        if(existing && card.executor !== existing.executor) {
-          if(this.active.size)throw new Error('请先停止当前任务，再更换人物绑定的执行端。');
-          if(this.store.list<import('../shared/project-flow').ProjectFlow>('project_flows').some(flow=>flow.memberIds?.includes(card.id)&&!['completed','cancelled'].includes(flow.status)))throw new Error('请先结束项目流程，再更换人物绑定的执行端。');
-          card.model=undefined;card.effort=undefined;
-        }
-        await this.roomRuntimes.invalidate(
-          (key) =>
-            (this.store.get<Session>("sessions", key)?.memberId ??
-              this.store.get<Session>("sessions", key)?.provider) === card.id,
-        );
-        if(existing&&card.executor!==existing.executor){
-          if(this.active.size||this.store.members().find(member=>member.id===card.id)?.executor!==existing.executor)throw new Error('成员任务或绑定已变化，请停止任务并刷新后重试。');
-          this.store.transaction(()=>{
-            for(const session of this.store.list<Session>('sessions').filter(session=>(session.memberId??session.provider)===card.id&&!session.flowId)){
-              const config=this.runConfiguration(session);
-              this.store.put('sessions',session.id,{...session,model:session.model??config.model,effort:session.effort??config.effort});
-            }
-            for(const project of this.store.list<Project>('projects').filter(project=>project.memberConfigs?.[card.id])){
-              const memberConfigs={...project.memberConfigs};delete memberConfigs[card.id];
-              this.store.put('projects',project.id,{...project,memberConfigs,memberConfigRevision:(project.memberConfigRevision??0)+1});
-            }
-            this.store.put('members',card.id,card);
-          });
-        }else this.store.put('members',card.id,card);
-        this.memberWorkspaces.folder(card.id,true);this.memberWorkspaces.ensureMember(card.id);
-        this.broadcast();
-        return card;
-      }
-      case "executor.save": {
-        const given = params.executor ?? {};
-        const existing = given.id
-          ? this.store.get<AcpExecutor>("executors", String(given.id))
-          : undefined;
-        if (given.id && !existing)
-          throw new Error("这个外接程序不存在，请刷新工作台");
-        if (given.id && this.acpLogins.has(String(given.id)))
-          throw new Error("请完成或取消登录后再修改连接。");
-        if (!existing && this.store.executors().length >= 12)
-          throw new Error("最多接入 12 个外接程序");
-        const executor = normalizeExecutor(
-          given,
-          existing ? { ...existing, permissions: this.permissionsFor(existing.id, this.settings) } : undefined,
-          existing
-            ? undefined
-            : (`acp-${randomUUID().replace(/-/g, "").slice(0, 12)}` as AcpExecutorId),
-        );
-        // Secret values never reach the database or a snapshot, even when sent as ordinary variables.
-        const previous = this.acpSecrets.get(executor.id) ?? {},
-          secrets: Record<string, string> = {};
-        for (const [key, value] of Object.entries(
-          params.secrets && typeof params.secrets === "object"
-            ? params.secrets
-            : {},
-        ))
-          if (
-            isSecretName(key) &&
-            /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key) &&
-            typeof value === "string" &&
-            value
-          )
-            secrets[key] = value.slice(0, 4096);
-        for (const key of Object.keys(executor.env))
-          if (isSecretName(key)) {
-            const value = executor.env[key];
-            delete executor.env[key];
-            const resolved =
-              value === SECRET_PLACEHOLDER ? previous[key] : value;
-            if (resolved) secrets[key] = resolved;
-          }
-        for (const value of Object.values(secrets)) registerSecret(value);
-        executor.secretKeys = Object.keys(secrets).sort();
-        this.acpSecrets.set(executor.id, secrets);
-        this.store.put("executors", executor.id, executor);
-        this.settings = { ...this.settings, permissions: { ...this.settings.permissions, [executor.id]: executor.permissions } };
-        this.store.put("settings", "main", this.settings);
-        rememberExecutors(this.store.executors());
-        await this.invalidateRuntimes(executor.id);
-        const known = this.providers.find((info) => info.id === executor.id);
-        if (known)
-          this.publishProvider({ ...known, name: executor.name, stale: true });
-        this.broadcast();
-        void this.probe(executor.id).catch(() => {});
-        return executor;
-      }
-      case "executor.delete": {
-        const id = String(params.id);
-        if (!isAcpId(id) || !this.store.get("executors", id))
-          throw new Error("这个外接程序不存在");
-        if (this.acpLogins.has(id))
-          throw new Error("请完成或取消登录后再删除连接。");
-        const users = this.store
-          .members()
-          .filter((member) => member.executor === id);
-        if (users.length)
-          throw new Error(
-            `还有成员在使用它：${users.map((member) => member.name).join("、")}`,
-          );
-        for (const session of this.store
-          .list<Session>("sessions")
-          .filter((item) => item.provider === id))
-          this.requireIdle(session.id, "删除外接程序");
-        this.removeExecutor(id);
-        this.broadcast();
-        return { deleted: true };
-      }
-      case "executor.authenticate": {
-        const executor = this.require<AcpExecutor>(
-          "executors",
-          String(params.id),
-        );
-        if (this.active.size || this.memberOperations.has(executor.id))
-          throw new Error("请先等待当前任务或下载完成，再登录执行端。");
-        if (this.acpLogins.has(executor.id))
-          throw new Error("登录正在进行，请在已打开的页面里完成");
-        const adapter = this.externalAdapter(executor);
-        this.acpLogins.add(executor.id);
-        this.executorLoginAdapters.set(executor.id, adapter);
-        this.executorLoginStates.set(executor.id, {
-          phase: "starting",
-          message: "正在启动官方登录…",
-        });
-        let authorized = false;
-        try {
-          await this.invalidateRuntimes(executor.id, true);
-          const result = await adapter.authenticate(
-            buildEnvironment(this.settings),
-            params.methodId == null ? undefined : String(params.methodId),
-            (state) => {
-              if (
-                this.executorLoginStates.get(executor.id)?.phase !== "cancelled"
-              ) {
-                this.executorLoginStates.set(executor.id, state);
-                this.push({ type: "executor-login", id: executor.id, state });
-              }
-            },
-          );
-          if (this.executorLoginStates.get(executor.id)?.phase === "cancelled")
-            throw new Error("登录已取消。");
-          authorized = true;
-          this.executorLoginStates.set(executor.id, {
-            phase: "completed",
-            message: "官方授权已完成，正在检查连接。",
-          });
-          return {
-            detail: `${executor.name} 已完成登录（${result.method}）。`,
-          };
-        } catch (error) {
-          if (this.executorLoginStates.get(executor.id)?.phase !== "cancelled")
-            this.executorLoginStates.set(executor.id, {
-              phase: "failed",
-              message: executor.catalogId === "zcode" && error instanceof Error
-                ? String(redact(error.message)).slice(0,400)
-                : "官方登录没有完成，请重试或检查网络。",
-            });
-          throw error;
-        } finally {
-          const completed=this.executorLoginStates.get(executor.id);
-          if (
-            this.alive && authorized &&
-            this.executorLoginStates.get(executor.id)?.phase !== "cancelled"
-          ) {
-            const check=this.probe(executor.id).then(()=>{
-              if(!this.alive||this.executorLoginStates.get(executor.id)!==completed)return;
-              const info=this.providers.find(item=>item.id===executor.id);
-              const state:CatalogLoginState={phase:'completed',message:info?.available?'官方授权已完成，连接检查通过。':`官方授权已完成，连接检查未通过：${info?.detail||'请重新检查成员连接。'}`};
-              this.executorLoginStates.set(executor.id,state);this.push({type:'executor-login',id:executor.id,state});
-            }).catch(()=>{});
-            this.loginChecks.add(check);
-            void check.finally(()=>this.loginChecks.delete(check));
-          }
-          this.acpLogins.delete(executor.id);
-          this.executorLoginAdapters.delete(executor.id);
-          if (this.alive) void this.schedule();
-        }
-      }
-      case "executor.loginStatus":
-        return this.executorLoginStates.get(String(params.id));
-      case "executor.cancelLogin": {
-        const id = String(params.id),
-          adapter = this.executorLoginAdapters.get(id);
-        if (adapter) {
-          this.executorLoginStates.set(id, {
-            phase: "cancelled",
-            message: "登录已取消。",
-          });
-          await adapter.stop();
-        }
-        return { cancelled: !!adapter };
-      }
-      case "team.visibility": {
-        const member = this.store
-          .members()
-          .find((item) => item.id === String(params.id));
-        if (!member) throw new Error("这位成员不存在");
-        if (typeof params.hidden !== "boolean")
-          throw new Error("请选择显示或隐藏人物卡");
-        const card = { ...member, cardHidden: params.hidden };
-        this.store.put("members", member.id, card);
-        // Visibility never invalidates a native context or stops a connection/turn.
-        this.broadcast();
-        return card;
-      }
-      case "team.delete": {
-        const member = this.store
-          .members()
-          .find((item) => item.id === String(params.id));
-        if (!member) throw new Error("这位成员不存在");
-        if (params.folderChoice !== undefined && params.folderChoice !== "keep")
-          throw new Error("删除人物卡会保留个人文件夹和成果，不能同时删除文件");
-        const sessions = this.store
-          .list<Session>("sessions")
-          .filter(
-            (session) => (session.memberId ?? session.provider) === member.id,
-          );
-        for (const session of sessions)
-          this.requireIdle(session.id, "删除成员");
-        const folder = this.memberWorkspaces.preserveMemberFolder(member.id);
-        const {
-          id,
-          executor,
-          name,
-          color,
-          portrait,
-          avatar,
-          portraitScale,
-          portraitOffset,
-          face,
-          avatarFace,
-          templateId,
-          builtIn,
-        } = member;
-        // Retain only attribution for history. Sessions, native IDs, outputs and shared executors stay intact.
-        this.store.transaction(() => {
-          this.store.put("removed_members", id, {
-            id,
-            executor,
-            name,
-            color,
-            portrait,
-            avatar,
-            portraitScale,
-            portraitOffset,
-            face,
-            avatarFace,
-            templateId,
-            builtIn,
-          });
-          this.store.delete("members", id);
-          const overrides = { ...this.settings.memberPermissions };
-          delete overrides[id];
-          this.settings = { ...this.settings, memberPermissions: overrides };
-          this.store.put("settings", "main", this.settings);
-          for (const project of this.store
-            .list<Project>("projects")
-            .filter(
-              (project) =>
-                !project.kind &&
-                (project.memberIds?.includes(id) ||
-                  project.memberConfigs?.[id]),
-            )) {
-            const configs = { ...project.memberConfigs };
-            delete configs[id];
-            this.store.put("projects", project.id, {
-              ...project,
-              memberIds: project.memberIds?.filter((value) => value !== id),
-              memberConfigs: configs,
-            });
-          }
-        });
-        const sessionIds = new Set(sessions.map((session) => session.id));
-        await this.roomRuntimes.invalidate((key) => sessionIds.has(key));
-        this.broadcast();
-        return { deleted: true, sessions: sessions.length, folder };
-      }
-      case "team.reset": {
-        const member = BUILTIN_MEMBERS.find(
-          (item) => item.id === String(params.id),
-        );
-        if (!member) throw new Error("只有内置成员可以恢复默认资料");
-        const current = this.store
-          .members()
-          .find((item) => item.id === member.id);
-        if (!current) throw new Error("这张人物卡已删除，请添加新成员");
-        this.store.put("members", member.id, { ...member, executor:current.executor, cardHidden:current.cardHidden });
-        await this.roomRuntimes.invalidate(
-          (key) =>
-            (this.store.get<Session>("sessions", key)?.memberId ??
-              this.store.get<Session>("sessions", key)?.provider) === member.id,
-        );
-        this.broadcast();
-        return this.store.members().find((item) => item.id === member.id);
-      }
-      case "profile.save": {
-        const given = params.profile ?? {};
-        const name =
-          typeof given.name === "string" ? given.name.trim().slice(0, 40) : "";
-        if (!name) throw new Error("名字不能为空");
-        const avatar =
-          typeof given.avatar === "string" &&
-          /^[a-f0-9-]{8,64}\.(png|jpe?g|webp|gif)$/i.test(given.avatar)
-            ? given.avatar
-            : undefined;
-        const profile: UserProfile = { name, ...(avatar ? { avatar } : {}) };
-        this.store.put("profile", "main", profile);
-        await this.roomRuntimes.invalidate();
-        this.broadcast();
-        return profile;
-      }
-      case "persona.import":
-        return this.importPersona(String(params.executor));
-      case "projectRoom.ensure": {
-        if (this.maintenance)
-          throw new Error("正在备份或恢复资料，请等完成后再操作。");
-        const thread = this.store.ensureProjectRoom(String(params.projectId));
-        this.broadcast();
-        return { roomId: thread.roomId, threadId: thread.id };
-      }
-      case "room.get":
-        return this.store.roomView(this.roomId);
-      case "room.send":
-        return this.roomSend(params);
-      case "room.generateImage":
-        return this.roomGenerateImage(params);
-      case "room.stop":
-        return this.roomId.startsWith("roundtable:")
-          ? this.roundtables.interruptRoom(this.roomId)
-          : this.roomStop();
-      case "room.handoff":
-        return this.roomHandoff(params);
       case "run.review":
         return this.reviewRun(params);
       case "run.verdict":
         return this.runVerdict(params);
-      case "room.pause":
-        return this.discussion.pause();
-      case "room.end": {
-        const state = this.roomStore.roomState(),
-          d = state.discussion;
-        if (
-          state.mode !== "discuss" ||
-          !d ||
-          typeof params.discussionId !== "string" ||
-          params.discussionId !== d.id
-        )
-          throw new Error("讨论已切换，请刷新后再结束。");
-        if (d.phase === "idle") return { ended: true };
-        const running = this.roomRunning;
-        await this.roomStop();
-        await running;
-        return this.discussion.finishByUser(
-          params.acknowledgeUnknown === true,
-          params.discussionId,
-        );
-      }
-      case "room.resume":
-        return this.discussion.resume(params ?? {});
-      case "room.minutes":
-        return this.discussion.requestMinutes(params ?? {});
-      case "room.host":
-        return this.discussion.hostChoice(params ?? {});
-      case "room.react":
-        return this.roomReact(
-          String(params.messageId ?? ""),
-          String(params.emoji ?? ""),
-        );
-      case "room.clear":
-        return this.roomClear();
-      case "room.uninherit":
-        return this.roomUninherit(String(params.threadId ?? ""));
-      case "memory.sources":
-        return memorySources(String(params.executor ?? ""));
-      case "memory.read":
-        return memoryCandidates(
-          String(params.executor ?? ""),
-          String(params.source ?? ""),
-        );
-      case "memory.accept":
-        return this.acceptMemories(params);
-      case "memory.dismiss": {
-        const thread = this.roomThread(String(params.threadId ?? ""));
-        if (thread.summary?.proposals) {
-          const { proposals: _handled, ...summary } = thread.summary;
-          this.roomStore.put("room_threads", thread.id, { ...thread, summary });
-          this.broadcast();
-        }
-        return { dismissed: true };
-      }
-      case "room.archive":
-        return this.roomArchive(
-          params.title,
-          Boolean(params.inherit),
-          params.memberId,
-          params.from == null ? undefined : String(params.from),
-        );
-      case "room.compress":
-        return this.roomCompress(
-          String(params.threadId ?? this.roomStore.currentRoomThread().id),
-          params.memberId,
-        );
-      case "room.rename":
-        return this.roomRename(String(params.threadId ?? ""), params.title);
-      case "room.delete":
-        return this.roomDelete(String(params.threadId ?? ""));
-      case "room.history":
-        return this.roomStore.roomHistory(
-          String(params.threadId ?? this.roomStore.currentRoomThread().id),
-          params.before == null ? undefined : String(params.before),
-          bounded(params.limit, 1, 200, 100),
-        );
-      case "room.export":
-        return this.roomExport(
-          String(params.threadId ?? this.roomStore.currentRoomThread().id),
-        );
       case "session.send":
         return this.send(
           params.sessionId,
@@ -4078,11 +3925,19 @@ export class Engine {
             withoutPath,
           ),
         );
-      case "attachment.import":
-        return importAttachments(this.store.dataDirectory, params.paths);
       case "session.events": {
         this.require<Session>("sessions", String(params.sessionId));
         return this.store.listEvents(String(params.sessionId));
+      }
+      case "run.inputs": {
+        // The snapshot carries previews only; retry, export and the session view read the exact task here.
+        const ids = Array.isArray(params.runIds) ? params.runIds.map(String).slice(0, 500) : [];
+        return Object.fromEntries(
+          ids.flatMap((id: string) => {
+            const run = this.store.get<Run>("runs", id);
+            return run ? [[id, run.input]] : [];
+          }),
+        );
       }
       case "run.nudge": {
         const runId = String(params.runId);
@@ -4185,10 +4040,264 @@ export class Engine {
         return this.pauseCollaboration(params.id);
       case "collaboration.resume":
         return this.resumeCollaboration(params.id);
+      default:
+        throw new Error(UNAVAILABLE_OPERATION);
+    }
+  }
+  /** Timed jobs, policies and the automatic budget. */
+  private async invokeAutomation(method: string, params: any): Promise<unknown> {
+    switch (method) {
+      case "automation.list":
+        return this.snapshot().automation;
+      case "automation.policy.save": {
+        const policies = AutomaticBudget.validate(params.policies),
+          dailyLife =
+            params.dailyLife === undefined
+              ? this.settings.dailyLife
+              : validateDailyLife(params.dailyLife);
+        this.settings = {
+          ...this.settings,
+          dailyLife,
+          automationPolicies: {
+            ...this.settings.automationPolicies,
+            ...policies,
+          },
+        };
+        this.store.put("settings", "main", this.settings);
+        this.dailyLife.sync();
+        this.broadcast();
+        return this.snapshot().automation;
+      }
+      case "automation.life.acknowledge": {
+        if (
+          !["daily-opening", "member-chat"].includes(params.feature) ||
+          params.acknowledgeUnknown !== true
+        )
+          throw new Error("请先核对上次发言和活动记录，再明确恢复未来的触发。");
+        this.automation.acknowledgeManaged(params.feature);
+        return this.snapshot().automation;
+      }
+      case "automation.save":
+        return this.timedJob(params);
+      case "automation.remove":
+        this.automation.remove(String(params.id));
+        return { removed: true };
+      case "automation.pause":
+        this.automation.pause();
+        return { paused: true };
+      case "automation.resume": {
+        const marker = path.join(
+          this.store.dataDirectory,
+          AUTOMATION_PAUSE_FILE,
+        );
+        if (existsSync(marker)) unlinkSync(marker);
+        this.automation.resume();
+        return { resumed: true };
+      }
+      default:
+        throw new Error(UNAVAILABLE_OPERATION);
+    }
+  }
+  /** Snapshot, settings, backups, diagnostics and main-process internals. */
+  private async invokeData(method: string, params: any): Promise<unknown> {
+    switch (method) {
+      case "backup.list":
+        return new BackupRestorer(this.store.dataDirectory).list();
+      case "backup.preview":
+        return new BackupRestorer(this.store.dataDirectory).preview(
+          String(params.id),
+        );
+      case "backup.create":
+        return this.createDataBackup("manual");
+      case "backup.delete":
+        if (params.confirm !== true) throw new Error("请先确认删除这份备份。");
+        return new BackupRestorer(this.store.dataDirectory).remove(
+          String(params.id),
+        );
+      case "internal.restore.begin":
+        this.beginDataMaintenance();
+        return { ready: true };
+      case "internal.restore.cancel":
+        this.endDataMaintenance();
+        return { cancelled: true };
+      case "internal.backup.beforeRestore":
+        if (!this.maintenance) throw new Error("恢复前尚未暂停执行服务。");
+        return this.createDataBackup("before-restore");
+      case "snapshot":
+        return this.snapshot();
+      case "internal.room.opened": {
+        if (typeof params.visible !== "boolean")
+          throw new Error("窗口状态无效。");
+        if (this.alive) this.dailyLife.opened(params.visible);
+        return { received: this.alive };
+      }
+      case 'internal.provider.loginBegin': {
+        const id=String(params.provider);
+        if(!['claude','codex','dsh'].includes(id))throw new Error('执行端无效。');
+        if(this.store.get('removed_providers',id))throw new Error('这个执行端连接已删除，请先重新添加连接。');
+        if(this.active.size||this.memberOperations.has(id)||this.acpLogins.has(id))throw new Error('请先停止当前任务或等待下载完成，再登录。');
+        this.acpLogins.add(id);
+        try{await this.invalidateRuntimes(id as ProviderId,true);}catch(error){this.acpLogins.delete(id);throw error;}
+        return {started:true};
+      }
+      case 'internal.provider.loginEnd':
+        this.acpLogins.delete(String(params.provider));void this.schedule();return {ended:true};
+      case "internal.provider.invalidate": {
+        if (!params.provider || params.provider === "dsh")
+          this.balanceRevision++;
+        for (const id of params.provider
+          ? [params.provider]
+          : this.executorIds()) {
+          this.cancelProbeRetry(id);
+          this.probeRevisions.set(id, (this.probeRevisions.get(id) ?? 0) + 1);
+          this.store.put("quotas", id, {
+            provider: id,
+            windows: [],
+            checkedAt: now(),
+            source: "event",
+            accountStamp: this.quotaAccountStamp(id),
+          });
+        }
+        await this.invalidateRuntimes(params.provider, true);
+        this.broadcast();
+        return { invalidated: true };
+      }
+      case "settings.save": {
+        if (this.active.size)
+          throw new Error("请先停止正在运行的成员，再修改执行端或网络设置");
+        const previous = this.settings;
+        const value = params.settings || params;
+        const next = {
+          ...this.settings,
+          ...value,
+          paths: { ...this.settings.paths, ...value.paths },
+          models: { ...this.settings.models, ...value.models },
+          efforts: { ...this.settings.efforts, ...value.efforts },
+        };
+        if (value.automationPolicies !== undefined)
+          next.automationPolicies = AutomaticBudget.validate({
+            ...this.settings.automationPolicies,
+            ...value.automationPolicies,
+          });
+        if (value.dailyLife !== undefined)
+          next.dailyLife = validateDailyLife(value.dailyLife);
+        if (value.discussionCallLimits !== undefined)
+          next.discussionCallLimits = discussionCallLimits(
+            value.discussionCallLimits,
+          );
+        if (
+          !["official", "npmmirror"].includes(next.npmRegistry ?? "official") ||
+          !["bundled", "local"].includes(next.nodeRuntime ?? "bundled") ||
+          !["subscription", "api"].includes(
+            next.claudeAuthMode ?? "subscription",
+          )
+        )
+          throw new Error("下载源、运行环境或登录方式无效。");
+        if (!["tun", "proxy"].includes(next.networkMode))
+          throw new Error("网络模式无效，请在设置里重新选择网络连接方式。");
+        if (
+          !Number.isInteger(next.maxParallel) ||
+          next.maxParallel < 1 ||
+          next.maxParallel > 8
+        )
+          throw new Error("同时运行数量应为 1–8");
+        next.maxRunMinutes = bounded(
+          next.maxRunMinutes,
+          1,
+          1440,
+          DEFAULT_SETTINGS.maxRunMinutes,
+        );
+        next.deepseekMaxRequests = bounded(
+          next.deepseekMaxRequests,
+          1,
+          200,
+          DEFAULT_SETTINGS.deepseekMaxRequests,
+        );
+        next.permissions = normalizePermissions(next.permissions);
+        next.memberPermissions = normalizeMemberPermissions(next.memberPermissions, new Set(this.store.members().map(member => member.id)));
+        if (typeof next.defaultAutoApprove !== "boolean")
+          throw new Error("新工作会话自动批准设置无效");
+        next.stopTimeoutMs = Math.max(
+          1000,
+          Math.min(Number(next.stopTimeoutMs) || 10000, 60000),
+        );
+        buildEnvironment(next);
+        // Model/effort choices change the next run, not the last observed account connection.
+        const affected = this.executorIds().filter(
+          (id) =>
+            this.settings.nodeRuntime !== next.nodeRuntime ||
+            (id === "claude" &&
+              this.settings.claudeAuthMode !== next.claudeAuthMode) ||
+            this.settings.networkMode !== next.networkMode ||
+            this.settings.proxyUrl !== next.proxyUrl ||
+            this.settings.paths[id] !== next.paths[id] ||
+            (id !== "deepseek" &&
+              JSON.stringify(this.settings.permissions[id]) !==
+                JSON.stringify(next.permissions[id])) ||
+            (id === "dsh" &&
+              (this.settings.dshProfile !== next.dshProfile ||
+                this.settings.deepseekBaseUrl !== next.deepseekBaseUrl)) ||
+            (id === "deepseek" &&
+              (this.settings.deepseekBaseUrl !== next.deepseekBaseUrl ||
+                this.settings.deepseekEnabled !== next.deepseekEnabled)),
+        );
+        const runtimeAffected = this.executorIds().filter(
+          (id) =>
+            affected.includes(id) ||
+            this.settings.models[id] !== next.models[id] ||
+            this.settings.efforts[id] !== next.efforts[id] ||
+            this.store.members().some(member => member.executor === id && JSON.stringify(this.settings.memberPermissions?.[member.id]) !== JSON.stringify(next.memberPermissions?.[member.id])),
+        );
+        // Retire all affected idle runtimes together, and do not persist a settings
+        // change whose native cleanup failed. Healthy cleanup never waits in series.
+        if (runtimeAffected.length) {
+          invalidateClaudeChecks();
+          const providers = new Set(runtimeAffected);
+          await this.roomRuntimes.invalidate((key) => {
+            const provider = this.store.get<Session>("sessions", key)?.provider;
+            return Boolean(provider && providers.has(provider));
+          });
+        }
+        if (this.active.size || this.settings !== previous)
+          throw new Error("保存期间任务或配置发生变化，已保留最新设置，请重试。");
+        this.settings = next;
+        this.store.put("settings", "main", next);
+        for (const executor of this.store.executors()) {
+          const permissions = next.permissions[executor.id];
+          if (permissions && JSON.stringify(permissions) !== JSON.stringify(executor.permissions))
+            this.store.put("executors", executor.id, { ...executor, permissions });
+        }
+        this.dailyLife.sync();
+        this.providers = this.providers.map((info) =>
+          affected.includes(info.id) ? { ...info, stale: true } : info,
+        );
+        for (const id of affected) {
+          this.probeRevisions.set(id, (this.probeRevisions.get(id) ?? 0) + 1);
+          const info = this.providers.find((info) => info.id === id);
+          if (info) this.store.put("providers", id, info);
+        }
+        this.broadcast();
+        for (const id of affected) void this.probe(id).catch(() => {});
+        return next;
+      }
+      case "internal.lookup": {
+        // Main-process checks need one record, not the whole workbench snapshot.
+        const session = params.sessionId
+          ? this.store.get<Session>("sessions", String(params.sessionId))
+          : undefined;
+        const projectId = params.projectId ?? session?.projectId;
+        return {
+          session,
+          project: projectId
+            ? this.store.get<Project>("projects", String(projectId))
+            : undefined,
+          ...(params.executors ? { executors: this.store.executors() } : {}),
+        };
+      }
       case "diagnostics.export":
         return this.diagnostics();
       default:
-        throw new Error("这个操作当前不可用，请刷新工作台后重试。");
+        throw new Error(UNAVAILABLE_OPERATION);
     }
   }
   /** Session housekeeping must never race a member that is still working in it. */
@@ -4219,6 +4328,7 @@ export class Engine {
   }
   private beginDataMaintenance() {
     this.assertDataIdle();
+    this.store.flushLog();
     this.maintenanceWasPaused = this.automation.snapshot().paused;
     this.maintenance = true;
     this.automation.pause();
@@ -6122,6 +6232,8 @@ export class Engine {
     if (text.length > 200000)
       throw new Error("单次输入过长，请把材料保存为项目文件");
     let session = this.require<Session>("sessions", sessionId);
+    if (this.store.get('removed_providers', session.provider)) throw new Error('这个执行端连接已删除，请重新添加连接后继续。');
+    if (this.removingExecutors.has(session.provider)) throw new Error('执行端连接正在删除，请完成后再发送消息。');
     if (this.acpLogins.has(session.provider))
       throw new Error("这个执行端正在登录，请完成后再发送消息。");
     if (session.roomRetiredAt)
@@ -6247,7 +6359,6 @@ export class Engine {
       this.store.put("outbox", run.id, {
         runId: run.id,
         sessionId,
-        text,
         delivery: "prepared",
         createdAt: now(),
       });
@@ -6489,7 +6600,6 @@ export class Engine {
         this.store.put("outbox", run.id, {
           runId: run.id,
           sessionId: session.id,
-          text: run.input,
           delivery,
           nativeTurnId,
           updatedAt: now(),
@@ -6549,11 +6659,6 @@ export class Engine {
           input: text,
           ...(attachments ? { attachments } : {}),
         });
-        const outbox = this.store.get<Record<string, unknown>>(
-          "outbox",
-          run.id,
-        );
-        if (outbox) this.store.put("outbox", run.id, { ...outbox, text });
         this.emit(
           ctx,
           "status",
@@ -7136,9 +7241,12 @@ export class Engine {
         redact({
           exportedAt: now(),
           bootId: this.bootId,
-          snapshot: this.snapshot(),
+          // Diagnostics keep the full run records the workbench snapshot omits.
+          snapshot: { ...this.snapshot(), runs: this.store.list<Run>("runs") },
           rendererErrors,
           roomRuntime,
+          // Why flow replies needed a format correction, without the reply text.
+          formatCorrections: formatCorrectionSummary(this.store),
         }),
         null,
         2,
@@ -7160,6 +7268,7 @@ export class Engine {
       await disposeOwned();
       await Promise.allSettled([...this.loginChecks]);
       this.closed = true;
+      if (this.fingerprints) setProgramFingerprintStore(undefined, this.fingerprints);
       this.store.close();
     })();
     return this.closing;

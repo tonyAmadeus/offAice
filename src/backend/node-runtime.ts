@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import type { Settings } from '../shared/types';
 import type { NodeRuntimeInfo } from '../shared/executor-catalog';
+import { windowsConsoleArguments } from './windows-console';
 
 const localVersions=new Map<string,string|undefined>();
 export function nodeAtLeast(version:string,minimum:string){
@@ -53,5 +54,5 @@ export function npmLaunch(env:NodeJS.ProcessEnv,cwd:string){
   }
   const pathKey=Object.keys(childEnv).find(key=>key.toLowerCase()==='path')||'PATH';
   childEnv[pathKey]=[...directories,childEnv[pathKey]].filter(Boolean).join(path.delimiter);
-  return {command:node,prefix:[cli],env:childEnv};
+  return {command:node,prefix:[...windowsConsoleArguments(),cli],env:childEnv};
 }

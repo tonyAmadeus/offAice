@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { chromium, expect } from '@playwright/test';
 import { createServer } from '../../scripts/ui-test-server.mjs';
-import { Engine } from '../../src/backend/engine.ts';
+import { Engine } from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 
 const directory=await mkdtemp(path.join(os.tmpdir(),'AIROOM project-room-ui-')),source=path.join(directory,'project');await mkdir(source);
 await writeFile(path.join(source,'a.txt'),'old-a');await writeFile(path.join(source,'b.txt'),'old-b');
@@ -35,8 +35,9 @@ const engine=new Engine(path.join(directory,'data'),event=>{publish=publish.then
     ctx.emit('status',kind==='submission'?'正在改文件':'正在核对',{});
     if(kind==='plan')payload=plan;
     else if(kind==='submission'){if(supplementScenario&&material().task.title==='改 B'&&holdSupplementAuthor){holdSupplementAuthor=false;await supplementAuthorGate;}await new Promise(r=>setTimeout(r,150));const task=material().task,file=task.allowedPaths[0];await writeFile(path.join(ctx.cwd,file),'new-'+file);
-      // Like the real run on 2026-10-06: Claudia's first reply and its format correction both use an invented evidence kind.
-      const bad=ctx.session.provider==='claude'&&badSubmissions-->0;payload={summary:'改好了',evidence:bad?[{...evidence[0],kind:'tool'}]:evidence,completionResults:task.completionCriteria.map(criterion=>({criterion,verified:true,evidence:'读取'}))};}
+      // Like the real run on 2026-10-06: Claudia's first reply and its format correction both use an invented evidence kind
+      // ("tool" itself is now read as an inspection, so the scenario uses a kind no tolerance maps).
+      const bad=ctx.session.provider==='claude'&&badSubmissions-->0;payload={summary:'改好了',evidence:bad?[{...evidence[0],kind:'tool-check'}]:evidence,completionResults:task.completionCriteria.map(criterion=>({criterion,verified:true,evidence:'读取'}))};}
     else if(kind==='review'){const task=material().task;payload=pass(task.completionCriteria);if(task.title==='改 B'&&badReviews-->0)payload.findings=[{kind:'verified',severity:'optional',title:'署名',detail:'可以加署名',evidence:'第 1 行'}];}
     else if(kind==='integration-check')payload=pass(material().criteria);
     else if(kind==='round-report')payload={summary:'两个文件都改好了，整合后检查通过。',completedTaskKeys:material().taskKeys,deliverables:['新的 a.txt','新的 b.txt'],validationSummary:'在整合副本里读取了两个文件',remainingIssues:[],nextRoundSummary:'',userDecisionNeeded:'请验收这一轮。'};

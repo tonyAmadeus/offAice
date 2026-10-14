@@ -1,12 +1,14 @@
 import {FlowError,type Evidence,type ReviewPayload,type ReviewFinding} from './project-flow';
 import {criterionKind,criterionText,type CompletionCriterion} from './project-flow';
+import {assertFlowFormatUnambiguous} from './flow-format';
 
 export function commandEvidenceProblem(e:Evidence){
-  if(e.kind!=='command')return;
+  if(e.kind!=='command'&&!e.commandKindInferred)return;
   if(e.source!=='observed')return 'missing-completion';
   if(e.exitCode!==undefined&&e.observedExitCode!==undefined&&e.exitCode!==e.observedExitCode)return 'exit-code-mismatch';
   if(e.exitCode===0&&e.executionStatus==='failed')return 'failed-execution';
 }
+export function inferredCommandNotes(evidence:Evidence[]){return evidence.filter(e=>e.commandKindInferred&&commandEvidenceProblem(e)).map(e=>'命令尚未核实：'+e.command+'；保留成员原报告，尚无相符的成功执行依据。');}
 /** Keep an unverified numeric claim visible without inventing a native exit code. */
 export function commandExitCodeNotes(evidence:Evidence[]){
   return [...new Set(evidence.filter(e=>e.kind==='command'&&e.source==='observed'&&e.exitCodeSource==='reported'&&e.exitCode!==undefined).map(e=>
@@ -48,13 +50,13 @@ export function rejectUserCriteria(criteria:CompletionCriterion[],userName=''){
 /** Preserve the member's verdict. Eligibility to advance is a separate, evidence-based outcome. */
 export function assessReview(payload:ReviewPayload,required:string[],deferred:string[]=[],previous:ReviewFinding[]=[],overruled:string[]=[],judged:string[]=[]){
   const negative=(payload.assessments??[]).filter(a=>judged.includes(a.criterion)&&a.rating==='not'&&a.reason.trim());
-  const reasons:string[]=[],findings=payload.findings.map(f=>{const old=previous.find(p=>p.id===f.previousFindingId||p.location===f.location&&p.request===f.request),check=old&&payload.previousFindingChecks?.find(c=>c.findingId===old.id),suppressed=old&&overruled.includes(old.id);
+  const reasons:string[]=[],findings=payload.findings.map(f=>{const old=previous.find(p=>p.id===f.previousFindingId||f.location!=='未注明位置'&&Boolean(f.request)&&p.location===f.location&&p.request===f.request),check=old&&payload.previousFindingChecks?.find(c=>c.findingId===old.id),suppressed=old&&overruled.includes(old.id);
     const evaluative=negative.length>0&&f.kind!=='suspected'&&Boolean(f.location.trim()&&f.request.trim());
     const needsFix=!suppressed&&check?.resolved!==true&&(f.kind==='verified'&&Boolean(f.evidence.trim())||evaluative)&&f.severity!=='optional'&&(!previous.length||Boolean(old)||f.severity==='blocking');
     if(old&&check?.resolved&&f.kind==='verified'&&f.severity!=='optional')reasons.push('旧问题核对与问题清单相互矛盾：'+f.location);
     return {...f,...(old?{previousFindingId:old.id}:{}),disposition:needsFix?'requires-fix' as const:'advice' as const};}),observedDefects=findings.filter(f=>f.disposition==='requires-fix');
   const missing=required.filter(c=>!payload.criteriaResults.some(r=>r.criterion===c&&r.verified&&Boolean(r.evidence.trim())));
-  const unbound=payload.evidence.filter(e=>e.kind==='command'&&e.source!=='observed');
+  const unbound=payload.evidence.filter(e=>commandEvidenceProblem(e)==='missing-completion');
   const conflicting=payload.evidence.filter(e=>['exit-code-mismatch','failed-execution'].includes(commandEvidenceProblem(e)??''));
   const onlyDeferredIncomplete=deferred.length>0&&!missing.length&&payload.criteriaResults.some(r=>deferred.includes(r.criterion)&&!r.verified)&&payload.criteriaResults.filter(r=>!r.verified).every(r=>deferred.includes(r.criterion));
   if(missing.length)reasons.push('未能核实：'+missing.join('、'));
@@ -71,7 +73,7 @@ export function assessReview(payload:ReviewPayload,required:string[],deferred:st
   if(missingEvidence)reasons.push('复核缺少验证依据。');
   let outcome:ReviewPayload['verdict'];
   if(missingOldChecks||missingEvidence||conflicting.length||mismatches.length)outcome='inconclusive';
-  else if(observedDefects.length){outcome='changes_requested';reasons.push(...observedDefects.map(f=>f.request));}
+  else if(observedDefects.length){outcome='changes_requested';reasons.push(...observedDefects.map(f=>f.request||[f.location,f.evidence].filter(Boolean).join('：')));}
   else if((payload.verdict==='inconclusive'&&!(judged.length>0&&!required.length&&judged.every(c=>payload.assessments?.some(a=>a.criterion===c&&['meets','partly'].includes(a.rating)))))||reasons.length){outcome='inconclusive';}
   else outcome='pass'; // An optional-only (or empty) issue list cannot request changes.
   // A legacy "user has not accepted" is explicitly deferred. Do not invent verified=true for it.
@@ -79,8 +81,16 @@ export function assessReview(payload:ReviewPayload,required:string[],deferred:st
   return {outcome,reasons,findings,advice:(payload.assessments??[]).filter(a=>judged.includes(a.criterion)&&a.rating==='partly').map(a=>a.criterion+'：'+a.reason)};
 }
 
+/** A missing display title may be filled; source locations and quoted text remain exact. */
+function sameSourceReference(prior:Record<string,unknown>,next:Record<string,unknown>){
+  if(next.kind!=='source'||prior.location!==next.location||prior.excerpt!==next.excerpt)return false;
+  const missingTitle=prior.title==null||typeof prior.title==='string'&&!prior.title.trim();
+  if(missingTitle)return next.title==null||typeof next.title==='string';
+  return typeof prior.title==='string'&&typeof next.title==='string'?prior.title.trim()===next.title.trim():prior.title===next.title;
+}
 /** A format-only retry may fix keys and enums, but cannot turn uncertainty into a verified fact. */
 export function assertReviewMeaning(original:unknown,corrected:unknown){
+  assertFlowFormatUnambiguous(original);
   if(!original||typeof original!=='object'||!corrected||typeof corrected!=='object')return;
   const before=original as Record<string,unknown>,after=corrected as Record<string,unknown>;
   if(Array.isArray(after.assessments))for(const raw of after.assessments){
@@ -90,13 +100,14 @@ export function assertReviewMeaning(original:unknown,corrected:unknown){
     const conflicting=prior?.rating!==undefined&&prior?.assessment!==undefined&&prior.rating!==prior.assessment;
     if(!prior||conflicting||!['meets','partly','not'].includes(String(rating))||rating!==next.rating||prior.reason!==next.reason)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正新增或改变了成员评价。');
   }
-  if(Array.isArray(before.evidence)&&Array.isArray(after.evidence))for(const raw of before.evidence){const prior=raw as Record<string,unknown>;if(prior.kind!=='source')continue;const next=after.evidence.find((e:Record<string,unknown>)=>e.kind==='source'&&e.location===prior.location&&e.title===prior.title&&e.excerpt===prior.excerpt);if(!next)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了来源或引用原文。');}
-  if(Array.isArray(after.evidence))for(const raw of after.evidence){const next=raw as Record<string,unknown>;if(next.kind!=='source')continue;if(!Array.isArray(before.evidence)||!before.evidence.some((e:Record<string,unknown>)=>e.kind==='source'&&e.location===next.location&&e.title===next.title&&e.excerpt===next.excerpt))throw new FlowError('FORMAT_MEANING_CHANGED','格式补正不能新增来源位置或引用。');}
+  if(Array.isArray(before.evidence)&&Array.isArray(after.evidence))for(const raw of before.evidence){const prior=raw as Record<string,unknown>;if(prior.kind!=='source')continue;const next=after.evidence.find((e:Record<string,unknown>)=>sameSourceReference(prior,e));if(!next)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了来源或引用原文。');}
+  if(Array.isArray(after.evidence))for(const raw of after.evidence){const next=raw as Record<string,unknown>;if(next.kind!=='source')continue;if(!Array.isArray(before.evidence)||!before.evidence.some((e:Record<string,unknown>)=>e.kind==='source'&&sameSourceReference(e,next)))throw new FlowError('FORMAT_MEANING_CHANGED','格式补正不能新增来源位置或引用。');}
   if(['pass','changes_requested','inconclusive'].includes(String(before.verdict))&&before.verdict!==after.verdict)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了原复核结论。');
   if(typeof before.verificationComplete==='boolean'&&before.verificationComplete!==after.verificationComplete)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了原验证完成状态。');
   if(Array.isArray(before.criteriaResults)&&Array.isArray(after.criteriaResults))for(const item of before.criteriaResults){
     if(!item||typeof item!=='object')continue;const prior=item as Record<string,unknown>,next=after.criteriaResults.find((c:Record<string,unknown>)=>c.criterion===prior.criterion);
     if(typeof prior.verified==='boolean'&&(!next||next.verified!==prior.verified))throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了完成标准的核实状态。');
+    if(prior.verified!==true&&next?.verified===true)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正不能把未提供的核实状态补成已核实。');
     if(prior.verified===true&&typeof prior.evidence==='string'&&next?.evidence!==prior.evidence)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正新增或改变了验证依据。');
   }
   if(Array.isArray(after.criteriaResults))for(const item of after.criteriaResults){const next=item as Record<string,unknown>,prior=Array.isArray(before.criteriaResults)?before.criteriaResults.find((c:Record<string,unknown>)=>c.criterion===next.criterion):undefined;
@@ -104,9 +115,11 @@ export function assertReviewMeaning(original:unknown,corrected:unknown){
   }
   if(Array.isArray(before.findings)&&Array.isArray(after.findings))for(const [index,item] of before.findings.entries()){const prior=item as Record<string,unknown>,next=after.findings.find((f:Record<string,unknown>)=>prior.location!==undefined&&f.location===prior.location&&f.request===prior.request)??after.findings[index];
     if(['verified','suspected','suggestion'].includes(String(prior.kind))&&(!next||next.kind!==prior.kind))throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了问题是否已经证实。');
+    if(prior.kind!=='verified'&&next?.kind==='verified')throw new FlowError('FORMAT_MEANING_CHANGED','格式补正不能把未分类的意见补成已证实问题。');
     if(['blocking','should-fix','optional'].includes(String(prior.severity))&&(!next||next.severity!==prior.severity))throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了问题严重程度。');
     for(const field of ['location','request'])if(typeof prior[field]==='string'&&(!next||next[field]!==prior[field]))throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了问题位置或修改要求。');
     if(typeof prior.evidence==='string'&&next&&next.evidence!==prior.evidence)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正改变了问题依据。');
+    if(prior.evidence==null&&typeof next?.evidence==='string'&&next.evidence.trim())throw new FlowError('FORMAT_MEANING_CHANGED','格式补正不能为缺少依据的意见补造依据。');
   }
   if(Array.isArray(after.findings))for(const [index,item] of after.findings.entries()){const next=item as Record<string,unknown>,prior=Array.isArray(before.findings)?before.findings.find((f:Record<string,unknown>)=>next.location!==undefined&&f.location===next.location&&f.request===next.request)??before.findings[index]:undefined;if(!prior&&next.kind==='verified')throw new FlowError('FORMAT_MEANING_CHANGED','格式补正新增了已核实的问题。');}
   if(Array.isArray(before.evidence)&&Array.isArray(after.evidence))for(const [index,item] of after.evidence.entries()){

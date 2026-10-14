@@ -344,7 +344,7 @@ export class MemberWorkspaces {
     this.putMessage(message);this.replying.add(roomId);this.host.changed();
     const work=this.work(room.projectId!,member.id),facts={reports:work.reports,tasks:work.tasks,operations:work.operations,runs:work.runs.map(({id,status,error,input,createdAt,completedAt})=>({id,status,error,input,createdAt,completedAt}))};
     const conversation=this.ordered(thread.id,roomId).filter(m=>!m.memberReport).slice(-30).map(m=>`${m.author==='user'?this.store.profile().name:member.name}：${m.text}`).join('\n\n');
-    const prompt=`[AIROOM 项目个人汇报 · 只读问答]\n你只回答 ${room.projectId} 项目里与 ${member.name} 有关的工作。以下是已保存事实与对话，引用其中的信息时区分已完成、未完成和待核对。默认只读：不要修改文件，不要执行命令，不要改变任务或已确认的方案。用户想加任务或改要求时，说明可用“转成追加任务 / 补充到当前任务”按钮，由用户确认后走项目流程。不要声称已经执行。\n\n已保存汇报与相关记录：\n${JSON.stringify(facts).slice(-100000)}\n\n本对话：\n${conversation.slice(-30000)}`;
+    const prompt=`[AIROOM 项目个人汇报 · 只读问答]\n你只回答 ${room.projectId} 项目里与 ${member.name} 有关的工作。以下是已保存事实与对话，引用其中的信息时区分已完成、未完成和待核对。默认只读：不要修改文件，不要执行命令，不要改变任务或已确认的方案。用户想加任务或改要求时，说明可用“转成追加任务 / 补充到当前任务”按钮，由用户确认后走项目流程。不要声称已经执行。正文只输出用户需要的回答，不附内部校验过程、协议字段、编号、指纹、运行记录或来源追溯。\n\n已保存汇报与相关记录：\n${JSON.stringify(facts).slice(-100000)}\n\n本对话：\n${conversation.slice(-30000)}`;
     const generation=this.generations.get(roomId)??0,shouldStart=()=>generation===(this.generations.get(roomId)??0);
     const replyId=randomUUID();this.putMessage({id:replyId,roomId,threadId:thread.id,author:member.id,text:'',at:now(),status:'speaking',replyTo:message.id});
     const task=this.host.reply(roomId,member,prompt,attachments,runId=>{const old=this.store.get<RoomMessage>('room_messages',replyId)!;this.putMessage({...old,runId});this.host.changed();},shouldStart).then(result=>{

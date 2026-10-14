@@ -1,3 +1,4 @@
+import {readableContent} from '../shared/content-presentation';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {ArrowLeft,Laptop,PanelRightClose,PanelRightOpen,RefreshCw} from 'lucide-react';
 import type {Project,RoomMessage,Snapshot,TimelineEvent} from '../shared/types';
@@ -12,7 +13,6 @@ import {Markdown} from './Markdown';
 import {WorkLog,WorkLogEntryView} from './work-log';
 import {ErrorBoundary} from './ErrorBoundary';
 import {RoundResults} from './round-results';
-import {ReviewDetails} from './review-details';
 import {ApprovalCard,PlanPanel} from './panels';
 import {TaskAdditionView} from './task-addition';
 import {GiveUp} from './project-room';
@@ -24,9 +24,9 @@ const roleName={author:'作者',reviewer:'复核人',lead:'负责人'};
 function ReportCard({report,invoke,onLog,historical=false}:{report:MemberReport;invoke:Invoke;onLog:(id:string)=>void;historical?:boolean}){
   return <article className="member-report" aria-label={report.title+' · '+roleName[report.role]}>
     <header><h2>{report.title}<span className={`member-report-role role-${report.role}`}>{roleName[report.role]}</span></h2><p>{dateTime(report.at)} · 这一轮{label(report.roundStatus)} · 方案{label(report.planStatus)}</p></header>
-    <div className="member-report-summary">{report.summary.length?report.summary.map((s,i)=><Markdown key={i} text={s}/>):<p>任务已安排，还没有交成果。</p>}</div>
+    <div className="member-report-summary">{report.summary.length?report.summary.map((s,i)=><Markdown key={i} text={readableContent(s)}/>):<p>任务已安排，还没有交成果。</p>}</div>
     {report.tasks.map(t=><div className="member-report-task" key={t.id}><p><strong>{t.title}</strong><span className="result-tag">{label(t.status)}</span></p>{t.files.length>0&&<p className="round-files">{t.files.map(f=><span key={f} className="round-file">{f}</span>)}</p>}<button type="button" className="link-button" onClick={()=>onLog(t.id)}>查看这项任务的工作日志</button></div>)}
-    {report.checks.map(c=><section key={c.id} className="member-report-check"><p><strong>检查结果</strong><span className="result-tag">{label(c.status)}</span></p><ReviewDetails projectId={report.projectId} invoke={invoke} assessments={c.assessments} strengths={c.strengths}/>{!!c.findings.length&&<ul>{c.findings.map(f=><li key={f.id}>{f.location}：{f.request}</li>)}</ul>}{c.taskId&&<button type="button" className="link-button" onClick={()=>onLog(c.taskId!)}>查看这项任务的工作日志</button>}</section>)}
+
     {!!report.remaining.length&&<section><h3>还没解决的</h3><ul>{report.remaining.map(s=><li key={s}>{s}</li>)}</ul></section>}
     {!!report.next.length&&<section><h3>接下来</h3><ul>{report.next.map(s=><li key={s}>{s}</li>)}</ul></section>}
     {report.acceptances.map(a=><p key={a.id} className="task-meta">验收：{a.actor==='user'?'你':'负责人'}{label(a.status)}{a.opinion?' · '+a.opinion:''}</p>)}

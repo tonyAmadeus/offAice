@@ -19,8 +19,8 @@ const snapshot = {
   projects: [{ id: 'p', name: '韧性项目', directory: 'C:\\proj', createdAt: at(60), collaborationPaused: false }],
   sessions: [{ id: 'a', projectId: 'p', provider: 'claude', title: 'Claude 对话', createdAt: at(50), updatedAt: at(5), revision: 1, writeMode: true }],
   runs: [
-    { id: 'r1', sessionId: 'a', projectId: 'p', provider: 'claude', revision: 1, status: 'ended', input: '第一轮任务', createdAt: at(10), updatedAt: at(9), completedAt: at(9), bootId: 'b', delivery: 'confirmed' },
-    { id: 'r2', sessionId: 'a', projectId: 'p', provider: 'claude', revision: 1, status: 'waiting_user', input: '第二轮任务', createdAt: at(5), updatedAt: at(4), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r1', sessionId: 'a', projectId: 'p', provider: 'claude', revision: 1, status: 'ended', inputPreview: '第一轮任务', inputLength: 5, createdAt: at(10), updatedAt: at(9), completedAt: at(9), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r2', sessionId: 'a', projectId: 'p', provider: 'claude', revision: 1, status: 'waiting_user', inputPreview: '第二轮任务', inputLength: 5, createdAt: at(5), updatedAt: at(4), bootId: 'b', delivery: 'confirmed' },
   ],
   events: [{ id: 'e1', runId: 'r1', sessionId: 'a', provider: 'claude', at: at(9), kind: 'delta', text: '第一轮正常完成。', fidelity: 'native' }],
   // Options must be a list; a string makes the approval card throw while rendering.

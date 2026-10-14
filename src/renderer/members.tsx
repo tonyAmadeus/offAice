@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type CSSProperties, type SyntheticEvent } from 'react';
-import type { MemberProfile, PermissionMember, ProviderInfo, Run, Session } from '../shared/types';
+import type { MemberProfile, PermissionMember, ProviderInfo, RunSummary, Session } from '../shared/types';
 import { BUILTIN_MEMBERS, PORTRAIT_SCALE, PROVIDER_NAMES } from '../shared/defaults';
 import claudiaArt from './assets/members/claudia.webp';
 import gptiaArt from './assets/members/gptia.webp';
@@ -55,7 +55,7 @@ export interface Team {
   /** The original identity of a session, including retained history of deleted cards. */
   ofSession(session: Pick<Session, 'provider' | 'memberId'> | undefined): TeamMember;
   /** The member who ran a turn (through its session). */
-  ofRun(run: Pick<Run, 'provider' | 'sessionId'>, sessions: Session[]): TeamMember;
+  ofRun(run: Pick<RunSummary, 'provider' | 'sessionId'>, sessions: Session[]): TeamMember;
 }
 const defaultArtwork = buildTeam(BUILTIN_MEMBERS);
 function displayFallback(id?:string):TeamMember {
@@ -86,7 +86,7 @@ export function TeamColors({ team }: { team: Team }) {
 export type Mood = 'working' | 'waiting' | 'resting' | 'offline' | 'away';
 
 /** The member's state in the room, derived only from real runs, approvals and probe results. */
-export function moodOf(info: ProviderInfo | undefined, runs: Run[], waitingOnUser: boolean, ready: boolean): Mood {
+export function moodOf(info: ProviderInfo | undefined, runs: RunSummary[], waitingOnUser: boolean, ready: boolean): Mood {
   if (waitingOnUser) return 'waiting';
   if (runs.some(run => ['running', 'stopping', 'queued'].includes(run.status) && !run.completedAt)) return 'working';
   if (!info) return 'away';

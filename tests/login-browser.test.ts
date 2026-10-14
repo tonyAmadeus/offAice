@@ -20,6 +20,13 @@ test('official browser gate opens once for a matching pending user login and for
   assert.equal(gate.accept('a',waiting('https://qoder.cn/login')),'https://qoder.cn/login');assert.equal(gate.accept('a',waiting('https://qoder.cn/login')),undefined);gate.finish('a');
   gate.begin('a','kimi');gate.clear();assert.equal(gate.accept('a',waiting('https://auth.kimi.com/login')),undefined);
 });
+
+test('Cursor-style spawn listeners receive the browser relay even after the CLI intercepts stderr',async()=>{
+  const source=`import {spawn} from 'node:child_process';process.stderr.write=()=>true;const events=[];const child=spawn('C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command',"Start-Process 'https://cursor.com/loginDeepControl?fixture=1'"],{stdio:'ignore',windowsHide:true});child.once('error',()=>process.exitCode=2);child.once('spawn',()=>events.push('spawn'));child.once('exit',()=>events.push('exit'));child.once('close',()=>{events.push('close');console.log(JSON.stringify(events));});`;
+  const child=spawn(process.execPath,['--import','data:text/javascript,'+encodeURIComponent(LOGIN_BROWSER_PRELOAD),'--input-type=module','-e',source],{windowsHide:true,stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);
+  assert.equal(await new Promise(resolve=>child.once('close',resolve)),0);
+  assert.deepEqual(JSON.parse(out),['spawn','exit','close']);assert.match(err,/AIROOM_BROWSER_URL https:\/\/cursor.com\/loginDeepControl\?fixture=1/);
+});
 function fakeCodex(url:string,success=true){
   return spawn(process.execPath,['--input-type=module','-e',`import{createInterface}from'node:readline';const lines=createInterface({input:process.stdin});lines.on('line',line=>{const p=JSON.parse(line);if(p.method==='account/login/start'){process.stdout.write(JSON.stringify({id:p.id,result:{type:'chatgpt',loginId:'fixture',authUrl:${JSON.stringify(url)}}})+'\\n');process.stdout.write(JSON.stringify({method:'account/login/completed',params:{loginId:'fixture',success:${success}}})+'\\n');}else if(p.id)process.stdout.write(JSON.stringify({id:p.id,result:{}})+'\\n');});`],{stdio:['pipe','pipe','pipe'],windowsHide:true});
 }

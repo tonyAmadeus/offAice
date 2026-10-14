@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {chromium,expect} from '@playwright/test';
 import {createServer} from '../../scripts/ui-test-server.mjs';
-import {Engine} from '../../src/backend/engine.ts';
+import {Engine} from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 const root=await mkdtemp(path.join(os.tmpdir(),'airoom-host-ui-')),source=path.join(root,'source');await mkdir(source);await writeFile(path.join(source,'材料.txt'),'keep');
 const output=path.resolve('.test-cache/ui-host-pick');await mkdir(output,{recursive:true});
 const server=await createServer({configFile:false,root:process.cwd(),logLevel:'silent',server:{host:'127.0.0.1',port:0}});await server.listen();

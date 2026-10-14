@@ -1,4 +1,5 @@
 import { ActiveRunProgress } from './run-progress';
+import {readableContent} from '../shared/content-presentation';
 import {workspaceLocation} from './workspace-location';
 import { memberUserSummary, reportForDisplay } from '../shared/report-presentation';
 import { RoundResults } from './round-results';
@@ -22,7 +23,7 @@ import {commandExitCodeNotes} from '../shared/project-flow-review';
 import {criterionText,criterionKind} from '../shared/project-flow';
 import {memberCriteria} from '../shared/project-flow-review';
 import {ReviewDetails} from './review-details';
-import { Avatar, UserAvatar, useTeam, type TeamMember } from './members';
+import { Avatar, useTeam, type TeamMember } from './members';
 import { RoomView } from './room';
 import { Markdown } from './Markdown';
 import { migrateProjectMembers, projectMembers, saveProjectMembers } from './project-members';
@@ -30,10 +31,9 @@ import { dateTime, runnable, time, type Invoke } from './ui';
 import { Modal } from './modals';
 import { MemberConfigFields, MemberRunConfig } from './member-config';
 import { ReportSwitcher, type ReportEntry } from './report-switcher';
-import {JOINT_STATUS} from './joint-review';
 import type {RoundtableSource} from '../shared/roundtable';
 import {useRoundtableNavigation} from './roundtable-navigation';
-import {JOINT_READS,type JointReview} from '../shared/joint-review';
+import {JOINT_READS} from '../shared/joint-review';
 import type { ConfigSelection } from '../shared/executor-config';
 
 const ROUND_STATUS: Record<Round['status'], string> = { pending: '未开始', executing: '进行中', integrating: '正在整合', checking: '整合检查中', awaiting_acceptance: '待验收', accepted: '已验收', changes_requested: '修改中', blocked: '已阻塞' };
@@ -356,7 +356,7 @@ function RoundCard({ round, lead, data, invoke, busy, onDecide, onRecover,onChec
   return <MemberLine id={lead} label={label}>
     <article className={`meeting-card round-card status-${round.status} ${awaiting ? 'awaiting' : ''}`} aria-label={`第 ${round.index + 1} 轮成品`}>
       <small className="round-review-level">本轮实际复核：{REVIEW_LEVEL_LABELS[integration?.reviewLevel??round.effectiveReviewLevel??roundReviewLevel(data.flow!,round)]}</small><strong className="round-card-title">{round.title}{acceptance?.acceptedAt && <small>{dateTime(acceptance.acceptedAt)} {acceptance.requiresApply && acceptance.status==='accepted' ? '已完成验收' : '负责人自验通过，尚未写回'}</small>}</strong>
-      {report ? <div className="round-report"><h4>这一轮完成了</h4><p className="round-report-summary">{report.summary}</p>
+      {report ? <div className="round-report"><h4>这一轮完成了</h4><div className="round-report-summary"><Markdown text={readableContent(report.summary)}/></div>
         {report.deliverables.length > 0 && <p className="round-deliverables">{report.deliverables.map(item => <span key={item} className="round-file">{item}</span>)}</p>}
         {report.userDecisionNeeded && <p className="round-report-ask"><Hand size={13} />{report.userDecisionNeeded}</p>}
         {report.remainingIssues.length > 0 && <><h4>还要注意</h4><ul>{report.remainingIssues.map(item => <li key={item}>{item}</li>)}</ul></>}

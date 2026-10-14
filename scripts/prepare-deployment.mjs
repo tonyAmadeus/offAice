@@ -1,13 +1,21 @@
 import {cp,mkdir,readFile,readdir,rm,writeFile,copyFile,lstat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {copyProductionDependencies} from './runtime-dependencies.mjs';
 import {writeBuildManifest} from './build-manifest.mjs';
 import {replaceExecutableIcon} from './executable-icon.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const installed=path.join(process.env.USERPROFILE,'AIROOM'),output=path.join(root,'release','win-unpacked');
-const receipt=JSON.parse(await readFile(path.join(installed,'build-manifest.json'),'utf8'));
+// The daily program folder (moved to the desktop on 2026-10-13); deploy-runtime.ps1 mirrors to the same place.
+// Ask Windows for the desktop the same way deploy-runtime.ps1 does: it may be redirected, e.g. into OneDrive.
+const desktop=execFileSync('powershell.exe',['-NoProfile','-Command',"[Environment]::GetFolderPath('DesktopDirectory')"],{encoding:'utf8',windowsHide:true}).trim()||path.join(process.env.USERPROFILE,'Desktop');
+const installed=path.join(desktop,'AIROOM'),output=path.join(root,'release','win-unpacked');
+// A direct update reuses the verified shell already there; the first copy comes from an unpacked green package.
+const receipt=JSON.parse(await readFile(path.join(installed,'build-manifest.json'),'utf8').catch(error=>{
+  if(error.code==='ENOENT')throw new Error(`No AIROOM program found in ${installed}. Unpack the green package (or run npm run package:green and copy release\\win-unpacked) there first, then deploy again.`);
+  throw error;
+}));
 const executable=path.join(installed,'AIROOM.exe');
 const digest=createHash('sha256').update(await readFile(executable)).digest('hex');
 if(digest!==receipt.hashes['AIROOM.exe'])throw new Error('Installed desktop executable differs from its verified manifest.');

@@ -2,9 +2,8 @@ import { ConfigurationHint, useProviderConfiguration } from './provider-configur
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CornerDownLeft, Search } from 'lucide-react';
 import { PROVIDER_NAMES } from '../shared/defaults';
-import type { Approval, Project, Run, Session, Snapshot, TimelineEvent } from '../shared/types';
+import type { Approval, RunSummary, Session, Snapshot } from '../shared/types';
 import { Avatar, useTeam, type Team } from './members';
-import { assistantText } from './timeline';
 import { shortDateTime, runLabel, isActiveRun, sessionTitle } from './ui';
 import { isConversationSession } from '../shared/session-classification';
 
@@ -73,60 +72,13 @@ export function QuickSwitcher({ snapshot, firstInput, onPick, onClose }: { snaps
   </div>;
 }
 
-/* ───────── Export ───────── */
-/** The conversation as Markdown: what was asked, what each member answered, and how each turn ended. */
-export function conversationMarkdown(session: Session, project: Project | undefined, runs: Run[], events: TimelineEvent[], title: string, team: Team) {
-  const persona = team.ofSession(session);
-  const lines = [`# ${title}`, '', `- 成员：${persona.name}（${PROVIDER_NAMES[session.provider]}）`, `- 项目：${project?.name ?? ''}${project ? `（${project.directory}）` : ''}`, `- 导出时间：${new Date().toLocaleString('zh-CN', { hour12: false })}`, ''];
-  for (const run of runs) {
-    const runEvents = events.filter(event => event.runId === run.id);
-    lines.push('---', '', `## 你 · ${new Date(run.createdAt).toLocaleString('zh-CN', { hour12: false })}`, '', run.input, '');
-    for (const supplement of runEvents.filter(event => (event.data as { role?: string } | undefined)?.role === 'user').slice(1)) lines.push(`> 补充：${supplement.text}`, '');
-    lines.push(`## ${persona.name} · ${runLabel(run)}`, '', assistantText(runEvents) || '（没有正文输出）', '');
-    if (run.validation) lines.push(`> 验收：${run.validation}`, '');
-  }
-  return lines.join('\n');
-}
-
-/* ───────── Unread ───────── */
-const SEEN_KEY = 'airoom.seen';
-function readSeen(): Record<string, string> { try { return JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}'); } catch { return {}; } }
-function hasSeenRecord() { try { return localStorage.getItem(SEEN_KEY) !== null; } catch { return true; } }
-/** Sessions whose latest turn finished after you last looked at them. Kept per device in local storage. */
-export function useUnread(snapshot: Snapshot, openSessionId: string) {
-  const [seen, setSeen] = useState<Record<string, string>>(readSeen);
-  const latest = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const run of snapshot.runs) { const at = run.completedAt ?? (run.status === 'waiting_user' ? run.updatedAt : undefined); if (at && (map.get(run.sessionId) ?? '') < at) map.set(run.sessionId, at); }
-    return map;
-  }, [snapshot.runs]);
-  // First run on this device: everything that already finished counts as seen, so old history isn't flagged.
-  const seeded = useRef(hasSeenRecord());
-  useEffect(() => {
-    if (seeded.current || !snapshot.backendReady) return;
-    seeded.current = true;
-    const next = Object.fromEntries(latest);
-    setSeen(next);
-    try { localStorage.setItem(SEEN_KEY, JSON.stringify(next)); } catch {}
-  }, [latest, snapshot.backendReady]);
-  useEffect(() => {
-    if (!openSessionId || !seeded.current) return;
-    const at = latest.get(openSessionId) ?? new Date().toISOString();
-    if (seen[openSessionId] && seen[openSessionId] >= at) return;
-    const next = { ...seen, [openSessionId]: at };
-    setSeen(next);
-    try { localStorage.setItem(SEEN_KEY, JSON.stringify(next)); } catch {}
-  }, [openSessionId, latest, seen]);
-  return (sessionId: string) => sessionId !== openSessionId && Boolean(latest.get(sessionId)) && (seen[sessionId] ?? '') < latest.get(sessionId)!;
-}
-
 /* ───────── Desktop notifications ───────── */
 export const NOTIFY_KEY = 'airoom.notify';
 export const notificationsEnabled = () => { try { return localStorage.getItem(NOTIFY_KEY) !== 'off'; } catch { return true; } };
 
 /** Tell the user when a member finishes or needs them while AIROOM is in the background. */
 export function useMemberNotifications(snapshot: Snapshot, firstInput: (id: string) => string | undefined, onOpen: (session: Session) => void, team: Team) {
-  const previous = useRef<{ runs: Map<string, Run['status']>; approvals: Set<string> } | null>(null);
+  const previous = useRef<{ runs: Map<string, RunSummary['status']>; approvals: Set<string> } | null>(null);
   useEffect(() => {
     const runs = new Map(snapshot.runs.map(run => [run.id, run.status]));
     const approvals = new Set(snapshot.approvals.filter(approval => approval.state === 'pending').map(approval => approval.id));

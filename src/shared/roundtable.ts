@@ -20,7 +20,7 @@ export interface RoundtableTopic {
   material:RoundtableMaterial;materialVersion?:VersionRef;reviewId?:string;memberIds:string[];leadMemberId:string;handRaise:boolean;hostPick:boolean;
   authorMemberId?:string;discussionId?:string;revealedAt?:string;conclusion?:{id:string;discussionId:string;messageId?:string;body:string;at:string;reviewRevision:number};
   /** Readable provenance for the hidden discussion material; no model call is needed to render it. */
-  discussionMaterial?: { members: { id:string; name:string; opinions:number }[]; findings:number; skipped:{ memberId:string; name:string; stage:string; reason:string }[]; truncated:boolean };
+  discussionMaterial?: { members: { id:string; name:string; opinions:number }[]; findings:number; skipped:{ memberId:string; name:string; stage:string; reason:string }[]; truncated:boolean;originalChars?:number;sentChars?:number };
   confirmedConclusionId?:string;handoffs?:{requestId:string;projectId:string;as:'material'|'task'|'plan';messageId:string;result?:unknown;at:string}[];
 }
 export interface RoundtableOverview extends Pick<RoundtableTopic,'id'|'title'|'kind'|'roomId'|'revision'|'status'|'archivedAt'|'createdAt'|'updatedAt'|'error'|'openingRequestId'> {

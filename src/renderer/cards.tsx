@@ -4,7 +4,7 @@ import { ConfigurationHint, useProviderConfiguration } from './provider-configur
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Download, ImagePlus, LoaderCircle, Plus, RotateCcw, Save, Trash2, UserRound } from 'lucide-react';
-import { BUILTIN_MEMBERS, PORTRAIT_SCALE, PROVIDER_NAMES, isAcpId } from '../shared/defaults';
+import { BUILTIN_MEMBERS, PORTRAIT_SCALE, PROVIDER_NAMES } from '../shared/defaults';
 import type { AcpExecutor, MemberProfile, PermissionMember, Snapshot, UserProfile } from '../shared/types';
 import { Avatar, Portrait, UserAvatar, buildTeam, useTeam, type TeamMember } from './members';
 import { providerSummary, runnable, type Invoke, type Notify } from './ui';

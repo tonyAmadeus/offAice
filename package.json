@@ -14,6 +14,8 @@
     "verify": "node scripts/verify.mjs",
     "package": "npm run build && electron-builder --win nsis portable --config electron-builder.json",
     "package:green": "node scripts/build.mjs && electron-builder --win --dir --config electron-builder.json && node scripts/package-green.mjs",
+    "package:signed": "node scripts/package-signed.mjs",
+    "package:green:signed": "node scripts/package-signed.mjs --green",
     "postpackage": "node scripts/package-handoff.mjs",
     "deploy": "node scripts/deploy-runtime.mjs"
   },

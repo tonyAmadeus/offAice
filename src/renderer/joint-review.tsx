@@ -7,7 +7,10 @@ import type {VersionRef} from '../shared/project-flow';
 import type {Invoke} from './ui';
 import './joint-review.css';
 
-export const JOINT_STATUS:Record<JointReview['status'],string>={preparing:'准备版本',active:'进行中',awaiting_author:'作者答复',awaiting_verification:'验证分歧',awaiting_decision:'待你决定',completed:'已完成',stale:'版本已过期',blocked:'需要核对',cancelled:'已取消'};
+export function JointReplyNotes({notes,label}:{notes?:string[];label:string}){
+  if(!notes?.length)return null;
+  return <details className="task-meta" aria-label={label+'的补充说明'}><summary>待补充或核实（{notes.length}）</summary><ul>{[...new Set(notes)].map(note=><li key={note}>{note}</li>)}</ul></details>;
+}
 
 export function JointFiles({projectId,review,version,invoke}:{projectId:string;review:JointReview;version:VersionRef;invoke:Invoke}){
   const [files,setFiles]=useState<Omit<Artifact,'path'>[]|null>(null),[text,setText]=useState(''),[error,setError]=useState('');
@@ -18,7 +21,6 @@ export function JointFiles({projectId,review,version,invoke}:{projectId:string;r
   </section>;
 }
 export function JointDecision({title,reason,busy,onDecide}:{title:string;reason:string;busy:boolean;onDecide:(choice:'accept'|'defer',opinion:string)=>void}){const [opinion,setOpinion]=useState('');return <article className="joint-decision"><h3><AlertTriangle size={14}/>{title}</h3><p>{reason}</p><textarea aria-label="分歧决定的理由" placeholder="补充理由（可选）；此决定会保留阻塞问题或未核实状态" value={opinion} onChange={e=>setOpinion(e.target.value)}/><div className="joint-actions"><button className="button small primary" disabled={busy} onClick={()=>onDecide('accept',opinion)}>采纳问题</button><button className="button small secondary" disabled={busy} onClick={()=>onDecide('defer',opinion)}>暂缓并保留疑点</button></div></article>;}
-export function JointRecovery({busy,onResolve}:{busy:boolean;onResolve:(choice:'recover'|'abandon',evidence:string)=>void}){const [evidence,setEvidence]=useState('');return <div className="joint-recovery"><p className="task-meta">先核对已有记录。恢复只消费已确认完成的真实回复，未知运行不会重发。</p><textarea aria-label="评审运行核对依据" value={evidence} onChange={e=>setEvidence(e.target.value)} placeholder="补充核对情况（可选）"/><div className="joint-actions"><button className="button small secondary" disabled={busy} onClick={()=>onResolve('recover',evidence)}>恢复已有完成结果</button><button className="button small secondary" disabled={busy} onClick={()=>onResolve('abandon',evidence)}>核对后放弃活动</button></div></div>;}
 
 export function RoundtableRecovery({slot,busy,onResolve}:{slot:JointSlot;busy:boolean;onResolve:(choice:'recover'|'abandon'|'retry'|'skip'|'adopt',evidence:string,acknowledgeUnknown?:boolean)=>void}){
   const [evidence,setEvidence]=useState(''),[confirm,setConfirm]=useState<'retry'|'adopt'>(),caps=slot.recovery;

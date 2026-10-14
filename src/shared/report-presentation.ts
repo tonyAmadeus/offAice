@@ -1,7 +1,8 @@
+import {readableContent} from './content-presentation';
 import type { RoundReport, Submission } from './project-flow';
 import type { ReportSystemNote } from './round-results';
 
-export const memberUserSummary = (submission: Pick<Submission, 'userSummary'|'summary'>) => submission.userSummary?.trim() || submission.summary;
+export const memberUserSummary = (submission: Pick<Submission, 'userSummary'|'summary'>) => readableContent(submission.userSummary?.trim() || submission.summary);
 
 /** Old reports remain unchanged on disk. Only recognized system lines move out of prose. */
 export function reportForDisplay(report: RoundReport): RoundReport {

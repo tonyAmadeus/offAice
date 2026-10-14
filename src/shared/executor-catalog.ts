@@ -51,6 +51,7 @@ export interface ExecutorCatalogEntry {
     args: string[];
     domains: string[];
     authenticateAfter?: string;
+    viaAcp?: boolean;
     noBrowser?: boolean;
   };
   modelConfiguration?: {
@@ -91,7 +92,7 @@ export const ALL_EXECUTOR_CATALOG: readonly ExecutorCatalogEntry[] = [
       description: "使用 Cursor 账号的套餐额度，与 Cursor 编辑器共享；可用模型和额度由官方账号决定。",
     }],
     profileDirectories: { CURSOR_CONFIG_DIR: "cursor", CURSOR_DATA_DIR: "data/cursor" },
-    login: { args: ["--disable-auto-update", "login"], domains: ["cursor.com"], authenticateAfter: "cursor_login" },
+    login: { args: ["--disable-auto-update", "login"], domains: ["cursor.com"], viaAcp: true },
     capabilities: ["官方 CLI", "ACP 连接", "官方账号订阅额度", "流式回复", "原会话恢复", "提问与计划确认"],
     limitations: [
       "下载 Cursor 官方 Windows x64 程序及其自带运行环境；不安装编辑器，不修改系统 PATH。",
@@ -620,7 +621,7 @@ export interface NodeRuntimeInfo {
   detail?: string;
 }
 export interface CatalogLoginState {
-  phase: "starting" | "waiting" | "completed" | "failed" | "cancelled";
+  phase: "starting" | "waiting" | "checking" | "completed" | "failed" | "cancelled";
   message: string;
   url?: string;
   code?: string;

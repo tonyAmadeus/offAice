@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, realpathSync, existsSync } from 'node:fs';
+import { readFileSync, realpathSync, existsSync, statSync, openSync, readSync, closeSync, createReadStream } from 'node:fs';
 import path from 'node:path';
 import { ADAPTER_CONTRACT_VERSION, type CompatibilityReport, type ExecutorIdentity } from '../shared/compatibility';
 import type { Settings, ProviderId } from '../shared/types';
@@ -41,22 +41,65 @@ export function compatibilitySync<T>(stage:string,action:()=>T):T{
   try{return action();}catch(cause){error=cause;throw cause;}finally{if(scope){scope.report.stages.push({stage,startedAt:new Date(start).toISOString(),durationMs:Date.now()-start,outcome:error?'failed':'passed',...(error?{error:String(redact((error as Error).message)).slice(0,2500)}:{})});if(scope.report.stages.length>100)scope.report.stages.shift();}}
 }
 export function observeProtocol(version: string){const scope=context.getStore();if(!scope)return;scope.report.identity.protocolVersion=version;if(scope.expected?.protocolVersion&&scope.expected.protocolVersion!==version)throw new Error('原会话协议版本不匹配，未新建上下文继续执行。');}
-/** Read the same file identity used by probes and runs without starting the program. */
-export function readProgramIdentity(file: string): Pick<ExecutorIdentity,'path'|'digest'|'version'|'versionSource'> {
-  const resolved=realpathSync(file),bytes=readFileSync(resolved);
+type ProgramIdentity=Pick<ExecutorIdentity,'path'|'digest'|'version'|'versionSource'>;
+/** A digest is reused only while the file keeps its size, timestamps, file id and manifest. */
+export type ProgramFingerprint={size:string;mtimeNs:string;ctimeNs:string;ino:string;manifest:string;digest:string};
+export type ProgramFingerprintStore={get(file:string):ProgramFingerprint|undefined;put(file:string,value:ProgramFingerprint):void};
+let fingerprintStore:ProgramFingerprintStore|undefined;
+const fingerprints=new Map<string,ProgramFingerprint>();
+/** Executables are hundreds of MB. Keep their digests across launches; the store's owner clears it on close. */
+export function setProgramFingerprintStore(store?:ProgramFingerprintStore,owner?:ProgramFingerprintStore){
+  if(owner&&fingerprintStore!==owner)return;
+  fingerprintStore=store;fingerprints.clear();
+}
+function programManifest(resolved:string){
   let directory=path.dirname(resolved),version:string|undefined,packageBytes=Buffer.alloc(0);
   for(let i=0;i<5;i++){
     const manifest=path.join(directory,'package.json');
     if(existsSync(manifest)){packageBytes=readFileSync(manifest);try{version=JSON.parse(packageBytes.toString()).version;}catch{}break;}
     const parent=path.dirname(directory);if(parent===directory)break;directory=parent;
   }
-  const digest=createHash('sha256').update(bytes).update(packageBytes).digest('hex');
+  return {version,packageBytes};
+}
+function programStamp(resolved:string,packageBytes:Buffer){
+  const info=statSync(resolved,{bigint:true});
+  return {size:String(info.size),mtimeNs:String(info.mtimeNs),ctimeNs:String(info.ctimeNs),ino:String(info.ino),manifest:createHash('sha256').update(packageBytes).digest('hex')};
+}
+const sameStamp=(a:Omit<ProgramFingerprint,'digest'>,b:Omit<ProgramFingerprint,'digest'>)=>a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs&&a.ino===b.ino&&a.manifest===b.manifest;
+function rememberFingerprint(resolved:string,value:ProgramFingerprint){
+  fingerprints.set(resolved,value);
+  try{fingerprintStore?.put(resolved,value);}catch{/* The digest stays valid in memory. */}
+}
+function identityOf(resolved:string,digest:string,version?:string):ProgramIdentity{
   return {path:resolved,digest,...(version?{version,versionSource:'manifest' as const}:{})};
 }
+/** Read the same file identity used by probes and runs without starting the program. `fresh` ignores the fingerprint cache. */
+export function readProgramIdentity(file: string, fresh=false): ProgramIdentity {
+  const resolved=realpathSync(file),{version,packageBytes}=programManifest(resolved),stamp=programStamp(resolved,packageBytes);
+  const known=fresh?undefined:fingerprints.get(resolved)??fingerprintStore?.get(resolved);
+  if(known&&sameStamp(known,stamp)){fingerprints.set(resolved,known);return identityOf(resolved,known.digest,version);}
+  const hash=createHash('sha256'),handle=openSync(resolved,'r'),buffer=Buffer.allocUnsafe(1<<20);
+  try{for(let read;(read=readSync(handle,buffer,0,buffer.length,null))>0;)hash.update(buffer.subarray(0,read));}finally{closeSync(handle);}
+  const digest=hash.update(packageBytes).digest('hex');
+  if(sameStamp(stamp,programStamp(resolved,packageBytes)))rememberFingerprint(resolved,{...stamp,digest});
+  return identityOf(resolved,digest,version);
+}
+/** Recompute the digest from the file without blocking the backend; used where a bound identity must be proven. */
+export async function verifyProgramIdentity(file: string): Promise<ProgramIdentity> {
+  const resolved=realpathSync(file),{version,packageBytes}=programManifest(resolved),stamp=programStamp(resolved,packageBytes),hash=createHash('sha256');
+  for await (const chunk of createReadStream(resolved,{highWaterMark:1<<20}))hash.update(chunk as Buffer);
+  const digest=hash.update(packageBytes).digest('hex');
+  if(sameStamp(stamp,programStamp(resolved,packageBytes)))rememberFingerprint(resolved,{...stamp,digest});
+  return identityOf(resolved,digest,version);
+}
+/** Check a candidate against the identity it was inspected with, hashing the whole file again off the critical path. */
+export async function confirmProgram(file: string) {
+  observeProgram(file, await verifyProgramIdentity(file));
+}
 /** Observe the resolved entry before it is started; never infer a historical version from today's settings. */
-export function observeProgram(file: string) {
+export function observeProgram(file: string, observed?: ProgramIdentity) {
   const scope=context.getStore();if(!scope)return;
-  const {path:resolved,digest,version}=readProgramIdentity(file);
+  const {path:resolved,digest,version}=observed??readProgramIdentity(file,Boolean(scope.expected));
   const same=scope.report.identity.path===resolved&&scope.report.identity.digest===digest&&scope.report.identity.versionSource==='native';
   Object.assign(scope.report.identity,{path:resolved,digest,...(!same&&version?{version,versionSource:'manifest' as const}:{})});
   const expected=scope.expected;

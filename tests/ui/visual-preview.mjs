@@ -26,10 +26,10 @@ const snapshot = {
     { id: 's4', projectId: 'p', provider: 'codex', title: 'Codex 对话', createdAt: minutes(30), updatedAt: minutes(0), revision: 1, writeMode: false },
   ],
   runs: [
-    { id: 'r1', sessionId: 's1', projectId: 'p', provider: 'claude', revision: 1, status: 'ended', input: '请完成：1) 读取 README.md 告诉我口令；2) 搜索所有 add；3) 新增 multiply 并运行检查。', createdAt: minutes(5), updatedAt: minutes(4), completedAt: minutes(4), bootId: 'b', delivery: 'confirmed' },
-    { id: 'r2', sessionId: 's1', projectId: 'p', provider: 'claude', revision: 1, status: 'running', input: '再帮我给 multiply 写单元测试，并运行。', createdAt: seconds(40), updatedAt: seconds(5), bootId: 'b', delivery: 'confirmed' },
-    { id: 'r3', sessionId: 's2', projectId: 'p', provider: 'codex', revision: 1, status: 'ended', input: '在继续之前，先问我要不要加参数校验。', createdAt: minutes(3), updatedAt: minutes(2), completedAt: minutes(2), bootId: 'b', delivery: 'confirmed' },
-    { id: 'r4', sessionId: 's3', projectId: 'p', provider: 'dsh', revision: 1, status: 'waiting_user', input: '清理临时文件', createdAt: minutes(9), updatedAt: minutes(8), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r1', sessionId: 's1', projectId: 'p', provider: 'claude', revision: 1, status: 'ended', inputPreview: '请完成：1) 读取 README.md 告诉我口令；2) 搜索所有 add；3) 新增 multiply 并运行检查。', inputLength: 59, createdAt: minutes(5), updatedAt: minutes(4), completedAt: minutes(4), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r2', sessionId: 's1', projectId: 'p', provider: 'claude', revision: 1, status: 'running', inputPreview: '再帮我给 multiply 写单元测试，并运行。', inputLength: 24, createdAt: seconds(40), updatedAt: seconds(5), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r3', sessionId: 's2', projectId: 'p', provider: 'codex', revision: 1, status: 'ended', inputPreview: '在继续之前，先问我要不要加参数校验。', inputLength: 18, createdAt: minutes(3), updatedAt: minutes(2), completedAt: minutes(2), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r4', sessionId: 's3', projectId: 'p', provider: 'dsh', revision: 1, status: 'waiting_user', inputPreview: '清理临时文件', inputLength: 6, createdAt: minutes(9), updatedAt: minutes(8), bootId: 'b', delivery: 'confirmed' },
   ],
   events: [
     { id: 'e0', runId: 'r1', sessionId: 's1', provider: 'claude', at: minutes(5), kind: 'message', text: 'x', data: { role: 'user' }, fidelity: 'derived' },

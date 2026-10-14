@@ -312,6 +312,8 @@ test('accepted steering has one durable receipt; unavailable steering becomes a 
     const receipt=await h.send(codex.id,'current constraint','supplement');assert.equal(receipt.delivery,'current');assert.equal(receipt.runId,sent.runId);assert.deepEqual(adapter.steered,['current constraint']);
     assert.equal(h.engine.store.list<Run>('runs').filter(run=>run.sessionId===codex.id).length,1);
     assert.ok(h.engine.store.list<any>('outbox').some(entry=>entry.kind==='steer'&&entry.delivery==='confirmed'));
+    // The run receipt points at the run, which holds the task; only supplements carry their own text.
+    assert.equal('text' in h.engine.store.get<any>('outbox',sent.runId),false);assert.equal(h.engine.store.list<any>('outbox').find(entry=>entry.kind==='steer')?.text,'current constraint');
     const claude=h.session(),initial=await h.send(claude.id);await h.started(initial.runId);const queued=await h.send(claude.id,'next constraint','supplement');assert.equal(queued.delivery,'queued');assert.equal(h.run(queued.runId).status,'queued');
   } finally {await h.dispose();}
 });

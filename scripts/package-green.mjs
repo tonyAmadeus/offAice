@@ -33,7 +33,8 @@ const guide=`AIROOM ${version} · Windows x64 免安装版\r\n\r\n`+
   '同一 Windows 账号下，本程序与安装版共用资料；同时打开会唤起已有窗口。\r\n'+
   '备份与恢复可在“设置与连接 → 工作台 → 备份”中操作。\r\n'+
   '移除免安装版时，退出程序后删除解压文件夹即可；用户目录中的资料保留。\r\n\r\n'+
-  '适用系统：Windows 10 / 11，x64。\r\n';
+  '适用系统：Windows 10 / 11，x64。\r\n'+
+  (manifest.windowsSignature?.trusted?'Windows 已校验程序的代码签名；首次下载仍可能需要建立 SmartScreen 信誉。\r\n':'当前构建未通过 Windows 受信任代码签名校验，首次下载可能显示“Windows 已保护你的电脑”或“未知发布者”。\r\n');
 await writeFile(path.join(source,'使用说明.txt'),'\uFEFF'+guide,'utf8');
 for(const name of await readdir(source))assert.ok(expectedRoot.has(name),`Unexpected runtime root entry: ${name}`);
 assert.deepEqual((await readdir(path.join(source,'resources'))).sort(),['app']);
@@ -67,6 +68,7 @@ execFileSync(verificationTool,['x',archive,'-o'+extracted,'-y'],{windowsHide:tru
 for(const item of inventory)assert.equal(digest(await readFile(path.join(extracted,item.path))),item.sha256,`Extracted file mismatch: ${item.path}`);
 await verifyRuntimeDependencies(path.join(extracted,'resources','app'));
 const receipt={builtAt:new Date().toISOString(),version,sourceCommit:manifest.sourceCommit,sourceDirty:false,archive,archiveBytes:(await lstat(archive)).size,archiveSha256:digest(await readFile(archive)),fileCount:inventory.length,uncompressedBytes:inventory.reduce((sum,item)=>sum+item.bytes,0),dependencies,privacy:'fresh staging; only application and production dependencies; no user profile or acquired CLI copied',archiveIntegrity:'passed',extractedFilesVerified:inventory.length,extracted,desktopAcceptance:'pending',modelCalls:0};
+receipt.windowsSignature=manifest.windowsSignature??{status:'unverified',trusted:false};
 await writeFile(path.join(root,'release','green-receipt.json'),JSON.stringify(receipt,null,2));
 await writeFile(archive+'.sha256',`${receipt.archiveSha256}  ${path.basename(archive)}\r\n`);
 console.log(JSON.stringify(receipt,null,2));

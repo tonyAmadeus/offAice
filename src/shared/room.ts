@@ -1,3 +1,4 @@
+import {readableContent} from './content-presentation';
 import type { MemberProfile, RoomMessage, RoomThread } from './types';
 
 export const DEFAULT_ROOM_THREAD = 'room-main';
@@ -75,17 +76,17 @@ export function roomMarkdown(thread: RoomThread, messages: RoomMessage[], name: 
     if (message.discussionControl || message.contextOnly) continue;
     const speaker = (message.authorName ?? name(message.author)).replace(/[\r\n]/g, ' ');
     const label = message.kind === 'summary' ? ' · 会议总结' : message.status === 'passed' ? message.reaction ? ' · 表情回应' : ' · 未发言' : message.status === 'failed' ? ' · 未完成' : message.status === 'stopped' ? ' · 已停止' : '';
-    lines.push('---', '', `## ${speaker}${label} · ${date(message.at)}`, '', message.status === 'passed' ? message.reaction ? `（用 ${message.reaction} 回应）` : '（选择不发言）' : message.text || '（没有正文）', '');
+    lines.push('---', '', `## ${speaker}${label} · ${date(message.at)}`, '', message.status === 'passed' ? message.reaction ? `（用 ${message.reaction} 回应）` : '（选择不发言）' : (message.author==='user'?message.text:readableContent(message.text)) || '（没有正文）', '');
     if (message.reactions) lines.push(`> 回应：${reactionText(message.reactions, name)}`, '');
     if (message.error) lines.push(`> ${message.error}`, '');
-    for (const file of message.attachments ?? []) lines.push(`> 附件：${file.name}（资料目录 attachments/${file.id}/）`);
-    for (const image of message.generatedImages ?? []) lines.push(`> 生成的图片：${image.name}（资料目录 attachments/${image.id}/）`);
+    for (const file of message.attachments ?? []) lines.push(`> 附件：${file.name}`);
+    for (const image of message.generatedImages ?? []) lines.push(`> 生成的图片：${image.name}`);
     if (message.attachments?.length || message.generatedImages?.length) lines.push('');
     if(message.memberReport){
       const report=message.memberReport;
       for(const task of report.tasks)lines.push(`- 任务：${task.title}（${task.status}）`,...task.files.map(file=>`  - 文件：${file}`));
-      for(const check of report.checks)lines.push(`- 检查：${check.status}`,...check.findings.map(f=>`  - ${f.location}：${f.request}；依据：${f.evidence}`),...check.assessments.map(a=>`  - ${a.criterion}（${a.rating}）：${a.reason}`),...check.strengths.map(s=>`  - 优点：${s}`));
-      lines.push(...report.remaining.map(s=>`- 遗留：${s}`),...report.next.map(s=>`- 下一步：${s}`),...report.acceptances.map(a=>`- 验收：${a.status}；${a.opinion??''}`),'');
+
+      lines.push(...report.remaining.map(s=>`- 遗留：${s}`),...report.next.map(s=>`- 下一步：${s}`),'');
     }
   }
   return lines.join('\n');

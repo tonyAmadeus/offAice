@@ -43,7 +43,7 @@ export function publishRoundReports(store:Store){
   for(const report of store.list<PendingReport>('room_reports').filter(r=>!r.publishedAt)){
     const flow=store.get<ProjectFlow>('project_flows',report.flowId),threadId=flow&&reportThread(store,flow);
     if(!flow||flow.projectId!==report.projectId||!threadId)continue;
-    const p=report.report,text=[`【${report.title} · 轮次汇报】`,p.summary,`交付：${p.deliverables.join('、')}`,`验证：${p.validationSummary}`,...(p.systemNotes??[]).map(note=>`检查提示：${note.text}`),p.remainingIssues.length?`待处理：${p.remainingIssues.join('；')}`:'',p.nextRoundSummary?`后续：${p.nextRoundSummary}`:'',p.userDecisionNeeded].filter(Boolean).join('\n\n');
+    const p=report.report,text=[`【${report.title} · 轮次汇报】`,p.summary,`交付：${p.deliverables.join('、')}`,p.remainingIssues.length?`待处理：${p.remainingIssues.join('；')}`:'',p.nextRoundSummary?`后续：${p.nextRoundSummary}`:'',p.userDecisionNeeded].filter(Boolean).join('\n\n');
     const message:RoomMessage={id:report.id,author:flow.leadMemberId,authorName:store.members().find(m=>m.id===flow.leadMemberId)?.name,threadId,text,at:report.createdAt,status:'done',flowReport:{flowId:flow.id,roundId:report.roundId,integrationId:report.integrationId}};
     store.transaction(()=>{if(!store.get('room_messages',message.id))store.roomScope(`project:${report.projectId}`).put('room_messages',message.id,message);store.put('room_reports',report.id,{...report,publishedAt:new Date().toISOString(),threadId});});
   }

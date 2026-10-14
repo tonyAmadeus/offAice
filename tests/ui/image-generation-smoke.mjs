@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from '../../scripts/ui-test-server.mjs';
 import { chromium, expect } from '@playwright/test';
-import { Engine } from '../../src/backend/engine.ts';
+import { Engine } from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 import { attachmentPath } from '../../src/backend/attachments.ts';
 
 const encoded='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6toAAAAAASUVORK5CYII=';

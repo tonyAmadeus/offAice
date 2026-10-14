@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowRight, Check, FileText, FolderOpen, GitBranch, Info, LoaderCircle, Play, Plus, Users, X } from 'lucide-react';
-import { PROVIDER_NAMES } from '../shared/defaults';
-import type { Project, ProviderId, Snapshot } from '../shared/types';
-import { Avatar, Portrait, useTeam } from './members';
-import { IconButton, PROVIDERS, providerSummary, runnable, type Invoke } from './ui';
+import { ArrowRight, Check, FolderOpen, GitBranch, LoaderCircle, Plus, Users, X } from 'lucide-react';
+import type { Project, Snapshot } from '../shared/types';
+import { Avatar, useTeam } from './members';
+import { IconButton, providerSummary, runnable, type Invoke } from './ui';
 import { projectMembers } from './project-members';
 import type { ConfigSelection } from '../shared/executor-config';
 import { MemberConfigFields } from './member-config';
@@ -54,36 +53,6 @@ export function ProjectModal({ invoke, onClose, onCreate }: { invoke: Invoke; on
   </Modal>;
 }
 
-export function SessionModal({ snapshot, project, initialMember, onClose, onCreate }: { snapshot: Snapshot; project: Project; initialMember?: string; onClose: () => void; onCreate: (params: { provider: ProviderId; memberId: string; title: string; writeMode: boolean }) => Promise<void> }) {
-  const team = useTeam();
-  const readyMember = team.members.find(member => runnable(snapshot.providers.find(item => item.id === member.executor)));
-  const [memberId, setMemberId] = useState<string>(team.members.find(member=>member.id===initialMember)?.id ?? readyMember?.id ?? team.members[0]?.id ?? '');
-  const member = team.members.find(member=>member.id===memberId) ?? team.members[0];
-  const [title, setTitle] = useState(''); const [writeMode, setWriteMode] = useState(snapshot.settings.defaultWriteMode); const [busy, setBusy] = useState(false);
-  const info = snapshot.providers.find(item => item.id === member?.executor);
-  // An unnamed session is titled from its first task, so leave the name empty by default.
-  async function submit() { if(!member)return;setBusy(true); try { await onCreate({ provider: member.executor, memberId: member.id, title: title.trim(), writeMode: writeMode && Boolean(info?.capabilities.write) }); } catch {} finally { setBusy(false); } }
-  if(!member)return <Modal title="开启一个会话" onClose={onClose}><div className="modal-body"><p>团队里还没有人物卡。请先在“设置与连接”中添加成员。</p></div><div className="modal-footer"><button type="button" className="button primary" onClick={onClose}>关闭</button></div></Modal>;
-  return <Modal title="开启一个会话" subtitle={`项目：${project.name} · 每个会话有独立的上下文`} onClose={onClose} className="session-modal">
-    <div className="modal-body">
-      <div className="field">这次请谁来帮忙
-        <div className="member-picker" role="radiogroup" aria-label="选择成员">{team.members.map(item => {
-          const executor = snapshot.providers.find(provider => provider.id === item.executor);
-          return <button type="button" role="radio" aria-checked={item.id === member.id} className={`member-choice member-${item.id} ${item.id === member.id ? 'selected' : ''}`} key={item.id} onClick={() => { setMemberId(item.id); if (!executor?.capabilities.write) setWriteMode(false); }}>
-            <Avatar member={item} size={44} />
-            <span className="member-choice-text"><strong>{item.name}</strong><small>{item.product}</small><em className={runnable(executor) ? 'ready' : ''}>{providerSummary(executor)}</em></span>
-            {item.id === member.id && <Check size={15} className="member-choice-check" />}
-          </button>;
-        })}</div>
-      </div>
-      <div className={`member-intro member-${member.id}`}><Portrait member={member} className="mini" /><p><strong>{member.name}</strong>{member.motto ? <>：「{member.motto}」</> : <>（{member.product}）</>}</p></div>
-      <label className="field">会话名称 <span className="optional">可选，留空会用第一条任务命名</span><input value={title} onChange={event => setTitle(event.target.value)} placeholder="例如：整理登录流程" /></label>
-      <label className="toggle-row"><span><strong>允许修改项目文件</strong><small>{info?.capabilities.write ? '会先建立独立工作副本，原项目由你验收。' : '这位成员目前只用于讨论、审阅和文本产物。'}</small></span><input type="checkbox" checked={writeMode && Boolean(info?.capabilities.write)} disabled={!info?.capabilities.write} onChange={event => setWriteMode(event.target.checked)} /></label>
-      {info?.detail && !runnable(info) && <div className="inline-notice"><Info size={14} /><span>{info.detail}</span></div>}
-    </div>
-    <div className="modal-footer"><button className="button quiet" onClick={onClose}>取消</button><button className="button primary" disabled={busy || !snapshot.backendReady} onClick={() => void submit()}>{busy ? <LoaderCircle size={14} className="spin" /> : <ArrowRight size={14} />}创建会话</button></div>
-  </Modal>;
-}
 
 export function InviteModal({ snapshot, invoke, initialProjectId, onClose, onCreateProject, onDone }: {
   snapshot: Snapshot; invoke: Invoke; initialProjectId?: string; onClose: () => void;

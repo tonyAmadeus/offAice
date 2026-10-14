@@ -8,6 +8,7 @@ import { stripVTControlCharacters } from 'node:util';
 import type { ProviderId, Settings } from '../../shared/types';
 import { spawnOwned, stopOwned } from '../process-supervisor';
 import { NativeResponseError } from '../adapter-failure';
+import { windowsConsoleArguments } from '../windows-console';
 
 export interface CliCommand { command: string; prefix: string[]; path: string }
 const PACKAGES: Partial<Record<ProviderId, string>> = { codex: '@openai/codex', claude: '@anthropic-ai/claude-code' };
@@ -107,7 +108,7 @@ export function prepareCliLaunch(command: CliCommand, args: string[], source: No
   observeNodeRuntime(env);
   for (const key of Object.keys(env)) if (key.toUpperCase() === 'ELECTRON_RUN_AS_NODE') delete env[key];
   const runner = command.prefix.length && env.AIROOM_NODE_EXE ? env.AIROOM_NODE_EXE : command.command;
-  const argv = [...command.prefix, ...args];
+  const argv = [...(command.prefix.length ? windowsConsoleArguments() : []), ...command.prefix, ...args];
   if (command.prefix.length && process.versions.electron && resolve(runner).toLowerCase() === resolve(process.execPath).toLowerCase()) {
     env.ELECTRON_RUN_AS_NODE = '1';
     // Managed Node CLIs fork process.execPath and need Node mode in their child tree.

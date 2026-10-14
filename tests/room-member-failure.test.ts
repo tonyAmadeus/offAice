@@ -574,3 +574,10 @@ test("meeting native questions suspend the idle timer until the human actually a
     await h.dispose();
   }
 });
+
+
+test('local preparation failure is reported as unsent while healthy members continue',async()=>{
+  const h=await fixture(call=>{if(call.input.you==='claude')throw Error('AIROOM 组装的消息超过本地输入上限，消息尚未发送。');call.ctx.markDelivery('confirmed');return {};},{manualDelivery:true});
+  try{await h.send('本地准备失败不能写成回答中断');await h.finish();const missed=h.engine.snapshot().room.messages.find(m=>m.author==='claude'&&m.status==='failed')!;assert.match(missed.text,/这条消息未发送/);assert.equal(h.engine.store.get<Run>('runs',missed.runId!)?.delivery,'prepared');assert.ok(h.engine.snapshot().room.messages.some(m=>m.author==='codex'&&m.status==='done'));}
+  finally{await h.dispose();}
+});

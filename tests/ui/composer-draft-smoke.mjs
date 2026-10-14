@@ -5,7 +5,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {chromium,expect} from '@playwright/test';
 import {createServer} from '../../scripts/ui-test-server.mjs';
-import {Engine} from '../../src/backend/engine.ts';
+import {Engine} from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 
 // Actual persistence and renderer navigation, with adapters that never use an account.
 const directory=path.join(process.env.AIROOM_TEST_PROFILE,'composer-ui-'+randomUUID());

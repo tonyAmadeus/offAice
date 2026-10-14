@@ -6,7 +6,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { Engine } from './helpers/seeded-engine';
 import { DEFAULT_SETTINGS } from '../src/shared/defaults';
-import { compatibilityStep, currentIdentity, newCompatibility, observeArguments, observeProgram, observeProtocol, observeVersion, withCompatibility } from '../src/backend/compatibility';
+import { compatibilityStep, confirmProgram, currentIdentity, newCompatibility, observeArguments, observeProgram, observeProtocol, observeVersion, readProgramIdentity, setProgramFingerprintStore, verifyProgramIdentity, withCompatibility, type ProgramFingerprint, type ProgramFingerprintStore } from '../src/backend/compatibility';
+import { createHash } from 'node:crypto';
 import type { CompatibilityReport } from '../src/shared/compatibility';
 import type { Adapter, ProviderInfo, Run, Session } from '../src/shared/types';
 import { configureAcp } from '../src/backend/adapters/acp-config';
@@ -103,4 +104,33 @@ test('candidate configuration incompatibility preserves selection and records th
     const reports=await engine.invoke('provider.compatibility',{provider:'codex'}) as CompatibilityReport[];
     assert.ok(reports.some(report=>report.trigger==='candidate'&&report.outcome==='failed'&&report.error?.includes('不支持所选模型')));
   }finally{await engine.close();await rm(root,{recursive:true,force:true});}
+});
+
+test('program fingerprints reuse a digest only while the file is unchanged, and bound checks always rehash',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'AIROOM fingerprint-')),program=path.join(root,'bin','tool.exe'),saved=new Map<string,ProgramFingerprint>();
+  const store:ProgramFingerprintStore={get:file=>saved.get(file),put:(file,value)=>{saved.set(file,value);}};
+  try{
+    await mkdir(path.dirname(program),{recursive:true});await writeFile(path.join(root,'package.json'),'{"version":"1.2.3"}');await writeFile(program,Buffer.alloc(3<<20,7));
+    setProgramFingerprintStore(store);
+    const expected=createHash('sha256').update(Buffer.alloc(3<<20,7)).update('{"version":"1.2.3"}').digest('hex');
+    const first=readProgramIdentity(program);
+    assert.equal(first.digest,expected,'the chunked digest equals the whole-file digest');
+    assert.equal(first.version,'1.2.3');assert.equal(saved.size,1,'the digest is remembered across launches');
+    // A forged cached digest with an identical stamp is served from cache, proving the file is not read again.
+    const [file,value]=[...saved][0];saved.set(file,{...value,digest:'cached'});setProgramFingerprintStore(store);
+    assert.equal(readProgramIdentity(program).digest,'cached');
+    assert.equal(readProgramIdentity(program,true).digest,expected,'fresh reads ignore the cache');
+    assert.equal((await verifyProgramIdentity(program)).digest,expected);
+    assert.equal(readProgramIdentity(program).digest,expected,'verification refreshes the cache');
+    // A bound identity is checked against the real bytes, never the cache.
+    saved.set(file,{...saved.get(file)!,digest:'cached'});setProgramFingerprintStore(store);
+    const report=newCompatibility('codex','candidate',DEFAULT_SETTINGS);
+    await withCompatibility(report,()=>confirmProgram(program),{adapterVersion:report.identity.adapterVersion,protocol:'acp',path:first.path,digest:expected});
+    await withCompatibility(newCompatibility('codex','candidate',DEFAULT_SETTINGS),async()=>observeProgram(program),{adapterVersion:report.identity.adapterVersion,protocol:'acp',path:first.path,digest:expected});
+    await writeFile(program,Buffer.alloc(3<<20,8));
+    assert.notEqual(readProgramIdentity(program).digest,expected,'changed bytes are hashed again');
+    await assert.rejects(withCompatibility(newCompatibility('codex','candidate',DEFAULT_SETTINGS),()=>confirmProgram(program),{adapterVersion:report.identity.adapterVersion,protocol:'acp',path:first.path,digest:expected}),/已改变/);
+    const other:ProgramFingerprintStore={get:()=>undefined,put:()=>{}};
+    setProgramFingerprintStore(undefined,other);assert.equal(readProgramIdentity(program).digest,saved.get(file)!.digest,'another owner cannot detach the active store');
+  }finally{setProgramFingerprintStore(undefined);await rm(root,{recursive:true,force:true});}
 });

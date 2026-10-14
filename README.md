@@ -13,11 +13,14 @@ AIROOM 是一个装在自己电脑上的“AI 工作室”。
 
 > 当前版本：**0.1**
 
-[下载 Windows x64 绿色版](https://github.com/tonyAmadeus/offAice/releases/latest) · [技术说明](docs/技术说明.md)
+[下载最新版本](https://github.com/tonyAmadeus/offAice/releases/latest) · [技术说明](docs/技术说明.md) · [用 AI 修改和部署 AIROOM](docs/AI协作开发指南.md)
 
-下载 `AIROOM-0.1.0-Windows-x64-Green.zip`，**完整解压后双击 `AIROOM.exe`**。支持 Windows 10 / 11 x64，无需安装 Node.js 或 npm。下载页同时提供 SHA-256 校验文件。
+- **免安装版**：下载 `AIROOM-0.1.0-Windows-x64-Green.zip`，**完整解压后双击 `AIROOM.exe`**；
+- **安装版**：下载 `AIROOM-Setup-0.1.0.exe`，按向导安装，可选择安装目录，附带卸载程序。
 
-绿色包不含账号、聊天记录或预装的成员程序。首次启动是空白工作台，没有人物卡或预配置连接。到“设置与连接 → 连接与版本”下载官方程序，或手动配置本机执行端，再登录并添加人物卡；下载和使用成员需要联网。某些成员程序另需 Node.js，按界面提示配置。
+支持 Windows 10 / 11 x64，无需安装 Node.js 或 npm。下载页同时提供 SHA-256 校验文件。
+
+程序包不含账号、聊天记录或预装的成员程序。首次启动是空白工作台，没有人物卡或预配置连接。到“设置与连接 → 连接与版本”下载官方程序，或手动配置本机执行端，再登录并添加人物卡；下载和使用成员需要联网。某些成员程序另需 Node.js，按界面提示配置。
 
 ---
 
@@ -65,7 +68,7 @@ AIROOM 是一个装在自己电脑上的“AI 工作室”。
 
 使用绿色版时，双击解压文件夹里的 `AIROOM.exe`。
 
-- 安装版通常位于 `C:\Users\你的用户名\AIROOM\`，绿色版位于你选择的解压文件夹；
+- 安装版默认位于 `%LOCALAPPDATA%\Programs\AIROOM`（安装时可更改），绿色版位于你选择的解压文件夹；
 - 关掉窗口后，它会缩到右下角托盘里继续待命；
 - 要彻底退出，请在托盘图标上右键选择退出。
 
@@ -326,7 +329,6 @@ AIROOM 的次数是它自己发出的请求数，不等于订阅账单。真实�
 - **Codex 在多人房间里**：偶尔会初始化超时，那一次会被跳过，不会重复发送，其他成员照常继续。
 - **KIMI 等成员登录过期**：可能只返回空内容，重新登录即可。
 - **“修改这张图”和生成图片**：需要使用 Codex、并且允许联网的成员。
-- **还在观察的项目**：后台系统通知、整天运行的内存占用、一周内的格式补正率。
 
 ---
 
@@ -334,13 +336,25 @@ AIROOM 的次数是它自己发出的请求数，不等于订阅账单。真实�
 
 技术栈、整体架构、各模块的实现方式、数据路径、权限机制、构建部署和测试体系，见 [技术说明](docs/技术说明.md)。
 
+想让 Claude Code、Codex 等 AI 助手帮你理解、删减或修改功能，再构建、部署成自己的版本，先看 [AI 协作开发指南](docs/AI协作开发指南.md)。
+
 开发环境需要 Windows、Git，建议使用 Node.js 26（与本项目验证环境一致）：
 
 ```powershell
 npm ci
+npm run dev
+```
+
+本地开发也可以双击根目录的 `Start-AIROOM-Dev.cmd`：每次先构建最新代码再打开桌面程序，失败时保留错误提示。`Start-AIROOM.cmd` 优先启动已部署或已安装的版本（依次查找桌面的 `AIROOM` 文件夹、`%LOCALAPPDATA%\Programs\AIROOM`、`%USERPROFILE%\AIROOM`），都没有时转到开发入口。Windows 开发运行时会复制到 `%LOCALAPPDATA%\AIROOM\development-runtime`，避免项目目录的低完整性标签影响启动；不需要管理员权限。修改代码后重新运行开发入口即可。
+
+其他验证命令：
+
+```powershell
 npm run build
 npm start
 npm run verify
 ```
 
 `npm run verify` 依次运行类型检查、全部测试、界面冒烟、构建和桌面冒烟。测试都用临时的、未登录的目录，不会碰日常资料。
+
+对外签名构建使用 `npm run package:signed`（安装器与便携 EXE）或 `npm run package:green:signed`（绿色 ZIP）。先按 electron-builder 的 Windows 签名配置提供受信任证书；签名入口在缺少证书或 Windows 校验不通过时失败。普通本地构建仍可运行，`build-manifest.json` 会记录实际签名状态。未签名包可能出现“Windows 已保护你的电脑／未知发布者”；新签名也需要积累 SmartScreen 信誉，不能保证首次下载无提示。参见 [Microsoft 的说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)。

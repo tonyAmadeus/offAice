@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Download, KeyRound, LoaderCircle, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { CATALOG_REVISION, EXECUTOR_CATALOG, catalogEntry, catalogProvider, type CatalogId, type CatalogStatus, type NodeRuntimeInfo, type CatalogLoginState } from '../shared/executor-catalog';
-import { isAcpId } from '../shared/defaults';
 import type { AcpExecutor, PermissionMember, Snapshot } from '../shared/types';
 import type { MemberInstallation } from '../shared/member-versions';
 import { AcpFields, emptyAcpDraft } from './executors';
@@ -82,11 +81,11 @@ export function CatalogLogin({executor,snapshot,invoke,notify}:{executor:AcpExec
   const [customModel,setCustomModel]=useState(false);
   const [login,setLogin]=useState<CatalogLoginState>(),[statusError,setStatusError]=useState('');
   useEffect(()=>{let live=true,pending=false;const check=async()=>{if(pending)return;pending=true;try{const state=await readLoginStatus(invoke,executor.id);if(live){setLogin(state);setStatusError('');}}catch{if(live)setStatusError('登录状态暂未更新，稍后会再次检查。');}finally{pending=false;}};void check();const timer=setInterval(()=>void check(),1500);return()=>{live=false;clearInterval(timer);};},[executor.id,invoke]);
-  const loggingIn=login?.phase==='starting'||login?.phase==='waiting';
+  const loggingIn=login?.phase==='starting'||login?.phase==='waiting'||login?.phase==='checking';
   async function save(clear=false){const value=key;setKey('');setBusy(true);try{
     await invoke('catalog.credentials',{id:entry.id,authentication:auth.id,...(value?{value}:{}),clear,model,baseUrl});
     if(entry.id==='zcode'&&!clear){const catalog=await invoke<CatalogReply>('catalog.list'),status=catalog.items.find(item=>item.entry.id==='zcode');if(status?.needsRepair&&status.selectedVersion){notify('正在补齐 ZCode 官方登录资源，下载校验完成后继续授权。');await invoke('catalog.install',{id:'zcode',version:status.selectedVersion,revision:CATALOG_REVISION});}}
-    if(auth.kind==='browser'&&!clear)await invoke('executor.authenticate',{id:executor.id,methodId:auth.id});
+    if(auth.kind==='browser'&&!clear){await invoke('executor.authenticate',{id:executor.id,methodId:auth.id});setLogin(await readLoginStatus(invoke,executor.id));}
     else await invoke('provider.probe',{provider:executor.id});
     notify(clear?'已清除密钥。':auth.kind==='api'?'密钥已加密保存。真实模型调用仍需验证。':'官方登录流程已结束，请核对连接状态。');
   }catch{}finally{setBusy(false);}}

@@ -1,23 +1,21 @@
 import {applySnapshotPatch,acceptSnapshot} from '../shared/snapshot-sync';
 import { OPENABLE_DOCUMENT } from '../shared/round-results';
 import { catalogEntry, catalogProvider } from '../shared/executor-catalog';
-import {ROUNDTABLE_READS,ROUNDTABLE_WRITES} from '../shared/roundtable';
 import { app, BrowserWindow, dialog, ipcMain, shell, screen, utilityProcess, MessageChannelMain, safeStorage, Tray, Menu, nativeImage, nativeTheme, powerMonitor, protocol, net, type UtilityProcess } from 'electron';
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { PROJECT_FLOW_METHODS } from '../shared/project-flow';
-import {PROJECT_TREE_METHODS} from '../shared/project-tree';
+import { RENDERER_METHODS } from '../shared/rpc-methods';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildEnvironment, redact, registerSecret, resolveSafePath } from '../backend/security';
 import { getCodexBrowserLoginLaunch } from '../backend/adapters/codex';
-import { CLAUDE_TOKEN_PATTERN, getClaudeLoginLaunch, getClaudeTokenLaunch } from '../backend/adapters/claude';
+import { CLAUDE_TOKEN_PATTERN, getClaudeLoginLaunch } from '../backend/adapters/claude';
 import { DshAdapter } from '../backend/adapters/dsh';
 import { createInterface } from 'node:readline';
 import { spawnOwned, stopOwned, type Ownership } from '../backend/process-supervisor';
 import { DEFAULT_SETTINGS, SECRET_PLACEHOLDER, isAcpId, isSecretName, parseEnv, splitSecretEnv } from '../shared/defaults';
-import type { AcpExecutor, ProviderInfo, Snapshot, Settings } from '../shared/types';
+import type { AcpExecutor, Project, ProviderInfo, Session, Snapshot, Settings } from '../shared/types';
+type Lookup = { session?: Session; project?: Project };
 import { assertNormalIntegrity } from './integrity';
 import { loginOutput, submitClaudeLoginCode } from './login-output';
 import {officialExecutorLoginUrl} from '../backend/official-login';
@@ -27,7 +25,7 @@ import {ProviderLoginState} from './provider-login-state';
 import { rpcTimeout,rpcTimeoutMessage } from './rpc-timeouts';
 import {BackendReadiness} from './backend-readiness';
 import { isAttachmentId, safeAttachmentName } from '../shared/attachments';
-import { AUTOMATION_PAUSE_FILE, AUTOMATION_RPC_METHODS } from '../shared/automation';
+import { AUTOMATION_PAUSE_FILE } from '../shared/automation';
 import { BackupRestorer, recoverInterruptedRestore, RestoreFailure } from '../backend/backup-restore';
 import type { BackupEntry } from '../shared/backup';
 import { acceptRunningVersion, runningVersion } from './version';
@@ -166,19 +164,6 @@ function storedClaudeToken(): string | undefined {
   if (!existsSync(claudeTokenFile()) || !safeStorage.isEncryptionAvailable()) return;
   try { const value = safeStorage.decryptString(readFileSync(claudeTokenFile())); registerSecret(value); return value; } catch { return; }
 }
-/** setup-token draws a terminal UI, so it runs in its own console window that stays open until the owner closes it.
- *  `start` always shows the new window, even when AIROOM itself was launched hidden; /s keeps the quoted line intact. */
-function tokenWindowArguments(command: string, args: string[]) {
-  const quote = (value: string) => /[\s"&|<>^()]/.test(value) ? `"${value.replace(/"/g, '')}"` : value;
-  return ['/d', '/c', 'start', '"Claude 长期令牌登录"', 'cmd.exe', '/d', '/s', '/k', `"${[command, ...args].map(quote).join(' ')}"`];
-}
-function openClaudeTokenWindow() {
-  backendReadiness.assertReady(backendGeneration);
-  const launch = getClaudeTokenLaunch(lastSnapshot?.settings || DEFAULT_SETTINGS, buildEnvironment(lastSnapshot?.settings || DEFAULT_SETTINGS));
-  const child = spawn(process.env.ComSpec || 'cmd.exe', tokenWindowArguments(launch.command, launch.args), { cwd: root, env: launch.env, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true });
-  child.on('error', error => push({ type: 'backend', ready, message: `令牌登录窗口没能打开：${redact(error.message)}` }));
-  return { started: true, detail: '已打开 Claude 长期令牌窗口。在浏览器完成授权后，把窗口里显示的令牌复制到下方输入框保存，然后关闭窗口。' };
-}
 /* Connected programs' API keys and tokens: encrypted per program with the system's credential protection. */
 const acpSecretDirectory = path.join(dataDirectory, 'secrets');
 const acpSecretFile = (id: string) => path.join(acpSecretDirectory, `${id}.secret`);
@@ -222,7 +207,7 @@ async function saveExecutor(params: any) {
 /** After start: encrypt plaintext secrets an older version stored, and drop files of removed programs. */
 async function tidyAcpSecrets() {
   try {
-    const snapshot = await request('snapshot') as Snapshot;
+    const snapshot = await request('internal.lookup', { executors: true }) as Pick<Snapshot, 'executors'>;
     for (const executor of snapshot.executors ?? []) if (Object.keys(executor.env ?? {}).some(isSecretName) && safeStorage.isEncryptionAvailable()) await saveExecutor({ executor: { ...executor, env: { ...executor.env, ...Object.fromEntries((executor.secretKeys ?? []).map(key => [key, SECRET_PLACEHOLDER])) } } });
     const known = new Set((snapshot.executors ?? []).map(executor => executor.id));
     for (const id of Object.keys(allAcpSecrets())) if (!known.has(id as AcpExecutor['id'])) rmSync(acpSecretFile(id), { force: true });
@@ -371,28 +356,8 @@ async function login(provider: string) {
   })();
   return { started: true, detail: '正在准备官方登录，可在下方查看进度或取消。' };
 }
-const methods = new Set(['snapshot', 'backend.restart', 'provider.probe', 'network.check', 'settings.save', 'project.create', 'project.openPath', 'session.create', 'session.send', 'session.events', 'session.approvals', 'session.update', 'session.delete', 'project.update', 'project.remove', 'workspace.apply', 'workspace.discard', 'workspace.undo', 'workspace.undo.info', 'window.attention', 'window.show', 'file.save', 'asset.import', 'team.save', 'member.stop.preview', 'member.stop', 'team.delete', 'team.reset', 'profile.save', 'persona.import', 'projectRoom.ensure', 'room.get', 'room.send', 'room.stop', 'room.pause', 'room.resume', 'room.host', 'room.react', 'room.handoff', 'run.review', 'run.verdict', 'room.compress', 'room.rename', 'room.clear', 'room.uninherit', 'memory.sources', 'memory.read', 'memory.accept', 'memory.dismiss', 'attachment.pick', 'attachment.import', 'attachment.reveal', 'room.archive', 'room.delete', 'room.history', 'room.export', 'member.versions', 'member.install', 'member.use', 'member.remove', 'run.stop', 'run.nudge', 'all.stop', 'approval.answer', 'artifact.list', 'artifact.read', 'artifact.open', 'workspace.open', 'project.diff', 'run.validate', 'collaboration.start', 'collaboration.pause', 'collaboration.resume', 'diagnostics.export', 'dialog.directory', 'provider.login', 'provider.loginCode', 'provider.tokenLogin', 'secret.set', 'executor.save', 'executor.delete', 'executor.authenticate', 'dialog.program', 'renderer.error']);
-for(const method of ['executor.loginStatus','executor.openLogin','executor.cancelLogin'])methods.add(method);
-for(const method of ['provider.loginStatus','provider.openLogin','provider.cancelLogin','provider.logout'])methods.add(method);
-for(const method of [...ROUNDTABLE_READS,...ROUNDTABLE_WRITES])methods.add(method);
-for(const method of AUTOMATION_RPC_METHODS)methods.add(method);
-methods.add('provider.config');methods.add('provider.compatibility');methods.add('member.installation');
-methods.add('room.end');methods.add('room.minutes');
-methods.add('attention.list');methods.add('attention.dismiss');
-methods.add('team.visibility');
-methods.add('provider.balance');
-methods.add('provider.quota');
-methods.add('room.generateImage');
-methods.add('attachment.save');
-methods.add('composer.draft.get');methods.add('composer.draft.save');
-methods.add('app.version');
-methods.add('app.accept');
-for(const method of ['catalog.list','catalog.latest','catalog.installation','catalog.install','catalog.use','catalog.remove','catalog.credentials','catalog.openLink','claudeApiKey.set'])methods.add(method);
-for(const method of ['desk.open','desk.folder','desk.topic','desk.switchFolder','report.open','report.work','room.select','room.read'])methods.add(method);
-for(const method of ['backup.list','backup.create','backup.delete','backup.preview','backup.prepare','backup.cancel','backup.restore'])methods.add(method);
+const methods = new Set<string>(RENDERER_METHODS);
 function registerIpc() {
-  PROJECT_FLOW_METHODS.forEach(method=>methods.add(method));
-  PROJECT_TREE_METHODS.forEach(method=>methods.add(method));
   ipcMain.handle('airoom:invoke', async (event, method: string, params: any) => {
     if (event.sender !== window?.webContents || event.senderFrame !== event.sender.mainFrame || !methods.has(method)) throw new Error('不允许的工作台请求');
     if(restoring&&!['snapshot','renderer.error','window.show','window.attention'].includes(method))throw new Error('正在恢复资料，请等待恢复完成。');
@@ -475,7 +440,7 @@ function registerIpc() {
       if(params?.provider!=='claude')throw new Error('该成员不使用授权码输入');
       await submitClaudeLoginCode(loginChildren.get('claude'),params?.code);return {submitted:true};
     }
-    if (method === 'provider.tokenLogin') { if (params?.provider !== 'claude') throw new Error('只有 Claude 使用长期令牌登录'); if(!storedClaudeToken())throw new Error('请通过官方 Claude Code 登录，或选择 API Key。'); return openClaudeTokenWindow(); }
+    if (method === 'provider.tokenLogin') { if (params?.provider !== 'claude') throw new Error('只有 Claude 使用长期令牌登录'); if(!storedClaudeToken())throw new Error('请通过官方 Claude Code 登录，或选择 API Key。'); return login('claude'); }
     if (method === 'secret.set' && params?.provider === 'claude') {
       const value = String(params?.value || '').trim();
       if(value&&!storedClaudeToken())throw new Error('请通过官方 Claude Code 登录，或选择 API Key。');
@@ -494,8 +459,7 @@ function registerIpc() {
     }
     if (method === 'project.openPath') {
       const resolved = await request('project.openPath', params) as {root:string;relativePath:string;target:string;mode:'open'|'reveal'};
-      const snapshot = await request('snapshot') as Snapshot;
-      const project = snapshot.projects.find(p => p.id === params.projectId);
+      const { project } = await request('internal.lookup', { projectId: params.projectId }) as Lookup;
       if (!project) throw new Error('项目不存在。');
       const target = resolveSafePath(project.directory, resolved.relativePath);
       if (target !== resolved.target || resolveSafePath(project.directory) !== resolved.root || !statSync(target).isFile()) throw new Error('项目路径已改变，请重新打开。');
@@ -503,10 +467,9 @@ function registerIpc() {
       const error = await shell.openPath(target); if (error) throw new Error(error); return {opened:true};
     }
     if (method === 'artifact.open') {
-      const snapshot = await request('snapshot') as Snapshot;
-      const session = snapshot.sessions.find(x => x.id === params?.sessionId); if (!session) throw new Error('会话不存在');
+      const { session, project: owner } = await request('internal.lookup', { sessionId: params?.sessionId }) as Lookup; if (!session) throw new Error('会话不存在');
       if(session.restoredHistoryOnly)throw new Error('恢复的会话仅保留历史，产物和工作副本未备份，请新建任务。');
-      const project = snapshot.projects.find(x => x.id === session.projectId)!;
+      const project = owner!;
       const relative = String(params.relativePath || ''); const output = relative.startsWith('@artifacts/');
       const target = resolveSafePath(output ? path.join(dataDirectory, 'artifacts', session.id) : session.workspace || project.directory, output ? relative.slice(11) : relative);
       if (!/\.(?:txt|md|json|ya?ml|csv|log|png|jpe?g|webp|gif|pdf|docx|xlsx|pptx)$/i.test(target)) { shell.showItemInFolder(target); return { revealed: true, detail: '已在文件夹中显示产物，执行类文件不会从工作台直接运行' }; }
@@ -566,10 +529,9 @@ function registerIpc() {
     }
     if (method === 'workspace.open') {
       // Opens the session's own work copy (or the project) in Explorer; nothing inside it is executed.
-      const snapshot = await request('snapshot') as Snapshot;
-      const session = snapshot.sessions.find(x => x.id === params?.sessionId); if (!session) throw new Error('会话不存在');
+      const { session, project } = await request('internal.lookup', { sessionId: params?.sessionId }) as Lookup; if (!session) throw new Error('会话不存在');
       if(session.restoredHistoryOnly)throw new Error('恢复的会话仅保留历史，工作副本未备份，请新建任务。');
-      const directory = session.workspace || snapshot.projects.find(x => x.id === session.projectId)?.directory;
+      const directory = session.workspace || project?.directory;
       if (!directory) throw new Error('这个会话还没有工作目录');
       const error = await shell.openPath(directory); if (error) throw new Error(error); return { opened: true, directory };
     }
@@ -598,7 +560,10 @@ function notifyRoomVisibility(){
   if(ready&&window&&!window.isDestroyed())void request('internal.room.opened',{visible:window.isVisible()&&!window.isMinimized()},10_000).catch(()=>{});
 }
 function createWindow() {
-  window = new BrowserWindow({ width: 1480, height: 970, minWidth: 1000, minHeight: 700, title: 'AIROOM', icon:path.join(dist,'airoom.ico'), backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1613' : '#f6f0e7', show: false, webPreferences: { preload: path.join(dist, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const iconPath=path.join(dist,'airoom.ico'),icon=nativeImage.createFromPath(path.join(dist,'airoom.png'));
+  if (icon.isEmpty()) throw new Error('AIROOM 窗口图标缺失，请使用完整程序包。');
+  window = new BrowserWindow({ width: 1480, height: 970, minWidth: 1000, minHeight: 700, title: 'AIROOM', icon, backgroundColor: nativeTheme.shouldUseDarkColors ? '#1a1613' : '#f6f0e7', show: false, webPreferences: { preload: path.join(dist, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  if(process.platform==='win32')window.setAppDetails({appId:'local.airoom.desktop',appIconPath:iconPath,appIconIndex:0,relaunchCommand:app.isPackaged?`"${process.execPath}"`:`"${process.execPath}" "${root}"`,relaunchDisplayName:'AIROOM'});
   window.setMenuBarVisibility(false);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', event => event.preventDefault());

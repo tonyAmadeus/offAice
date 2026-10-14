@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Briefcase, CheckCheck, CheckCircle2, History, LoaderCircle, SearchCheck, Undo2 } from 'lucide-react';
-import type { RoomMessage, Run, Snapshot } from '../shared/types';
+import type { RoomMessage, RunSummary, Snapshot } from '../shared/types';
 import { Markdown } from './Markdown';
 import { Modal } from './modals';
 import { Avatar, useTeam } from './members';
@@ -20,7 +20,7 @@ export function HandoffDialog({ snapshot, invoke, source, onClose, onDone }: { s
   const [writeMode, setWriteMode] = useState(snapshot.settings.defaultWriteMode);
   const [text, setText] = useState(source.text);
   const [busy, setBusy] = useState(false);
-  const firstInput = (id: string) => snapshot.runs.filter(run => run.sessionId === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0]?.input;
+  const firstInput = (id: string) => snapshot.runs.filter(run => run.sessionId === id).sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0]?.inputPreview;
   const chosenSession = sessions.find(session => session.id === sessionId);
   const member = team.get(memberId);
   async function submit() {
@@ -95,7 +95,7 @@ export function RoomNote({ message, snapshot, invoke, archived, onOpen }: { mess
 }
 
 /** Ask another member to check a finished run read-only; the answer comes back as 已核实 / 需实测 / 建议. */
-export function ReviewDialog({ snapshot, invoke, run, threadId, messageId, onClose, onDone }: { snapshot: Snapshot; invoke: Invoke; run: Run; threadId?: string; messageId?: string; onClose: () => void; onDone: (target: { projectId: string; sessionId: string }) => void }) {
+export function ReviewDialog({ snapshot, invoke, run, threadId, messageId, onClose, onDone }: { snapshot: Snapshot; invoke: Invoke; run: RunSummary; threadId?: string; messageId?: string; onClose: () => void; onDone: (target: { projectId: string; sessionId: string }) => void }) {
   const team = useTeam();
   const session = snapshot.sessions.find(item => item.id === run.sessionId);
   const author = session ? team.ofSession(session) : undefined;

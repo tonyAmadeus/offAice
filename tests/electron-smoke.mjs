@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron,expect } from '@playwright/test';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import {desktopScreenshot} from './helpers/desktop-screenshot.mjs';
 
 // This smoke test never starts a login or sends a model task.
@@ -81,6 +81,16 @@ try {
   await page.waitForFunction(()=>typeof window.airoom?.invoke==='function');
   const snapshot=await page.evaluate(()=>window.airoom.invoke('snapshot'));
   assert.ok(snapshot?.backendReady,'utility worker + MessagePort RPC did not become ready');
+  if(process.platform==='win32'){
+    const windowState=await application.evaluate(({BrowserWindow,app})=>({handle:BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE().toString(),icon:app.getAppPath()+'\\dist\\airoom.ico',exe:process.execPath}));
+    const state=JSON.parse(execFileSync('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-File',path.join(root,'tests/helpers/windows-window-state.ps1'),'-Handle',windowState.handle,'-IconOutput',path.join(directory,'windows-taskbar-icon.png')],{windowsHide:true,encoding:'utf8',timeout:30000}).trim());
+    await writeFile(path.join(directory,'windows-window-state.json'),JSON.stringify(state,null,2));
+    assert.equal(state.appId,'local.airoom.desktop');assert.equal(state.relaunchName,'AIROOM');
+    assert.ok(state.relaunchCommand.includes(windowState.exe),'taskbar relaunch targets the running executable');
+    assert.ok(state.relaunchIcon.includes(windowState.icon),'taskbar icon targets this actual application directory');
+    assert.equal(state.hasWindowIcon,true,'the native window has a real icon');
+    console.log('Native Windows window icon and taskbar relaunch properties verified.');
+  }
   assert.deepEqual(snapshot.members,[],'first launch has no pre-created character cards');
   assert.deepEqual(snapshot.executors,[],'first launch has no pre-created connections');
   assert.deepEqual(await page.evaluate(()=>window.airoom.invoke('provider.probe')),[],'first launch does not discover unconfigured programs');
@@ -183,7 +193,7 @@ try {
   assert.deepEqual(imageCard.face,framed.face);assert.equal(imageCard.portraitScale,framed.portraitScale);assert.deepEqual(imageCard.portraitOffset,framed.portraitOffset);assert.equal(imageCard.portrait,imported.file);
   await cardDialog.getByRole('button',{name:'编辑 Claudia 的人物卡'}).click();
   // Switching from a different-shaped upload back to built-in art must discard the old measured aspect.
-  const landscapeSource=path.join(root,'tests','ui','results','empty-1100.png');
+  const landscapeSource=path.join(root,'tests','fixtures','landscape-upload.png');
   await application.evaluate(({dialog},file)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[file]});},landscapeSource);
   await page.getByRole('button',{name:'上传立绘',exact:true}).click();
   await page.waitForFunction(()=>{

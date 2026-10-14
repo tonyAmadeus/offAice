@@ -22,8 +22,8 @@ const snapshot = {
     { id: 'c', projectId: 'p', provider: 'dsh', title: '旧的调研', createdAt: at(30), updatedAt: at(30), revision: 1, writeMode: false, archived: true },
   ],
   runs: [
-    { id: 'r1', sessionId: 'a', projectId: 'p', provider: 'claude', revision: 1, status: 'stopped', input: '把 README 翻译成英文', createdAt: at(6), updatedAt: at(5), completedAt: at(5), bootId: 'b', delivery: 'confirmed' },
-    { id: 'r2', sessionId: 'b', projectId: 'p', provider: 'codex', revision: 1, status: 'ended', input: '检查登录', createdAt: at(4), updatedAt: at(3), completedAt: at(3), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r1', sessionId: 'a', projectId: 'p', provider: 'claude', revision: 1, status: 'stopped', inputPreview: '把 README 翻译成英文', inputLength: 14, createdAt: at(6), updatedAt: at(5), completedAt: at(5), bootId: 'b', delivery: 'confirmed' },
+    { id: 'r2', sessionId: 'b', projectId: 'p', provider: 'codex', revision: 1, status: 'ended', inputPreview: '检查登录', inputLength: 4, createdAt: at(4), updatedAt: at(3), completedAt: at(3), bootId: 'b', delivery: 'confirmed' },
   ],
   events: [{ id: 'u1', runId: 'r1', sessionId: 'a', provider: 'claude', at: at(5), kind: 'status', text: '额度', data: { rateLimit: { status: 'allowed', rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 0.42, resetsAt: 1791069000 } } } }, fidelity: 'native' }], approvals: [], providers: ['claude', 'codex', 'dsh'].map(provider), collaborations: [],
   settings: { networkMode: 'tun', proxyUrl: '', paths: {}, models: {}, efforts: {}, permissions: { codex: { commands: 'auto', fileScope: 'any', network: true }, claude: { commands: 'auto', fileScope: 'any', network: true }, dsh: { commands: 'auto', fileScope: 'any', network: true } }, deepseekEnabled: false, deepseekBaseUrl: '', dshProfile: 'airoom', maxParallel: 2, stopTimeoutMs: 10000, defaultWriteMode: true, defaultAutoApprove: true, maxRunMinutes: 30, deepseekMaxRequests: 12 },

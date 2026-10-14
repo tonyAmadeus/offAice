@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { PROVIDER_NAMES, isAcpId } from '../shared/defaults';
-import type {AcpExecutor, ProviderId, ProviderInfo, Run, Session, Settings } from '../shared/types';
+import { isAcpId } from '../shared/defaults';
+import type {ProviderId, ProviderInfo, RunSummary, Session } from '../shared/types';
 
 export type Invoke = <T = unknown>(method: string, params?: unknown, success?: string, options?:{background?:boolean}) => Promise<T>;
 export type Notify = (text: string, error?: boolean) => void;
@@ -8,22 +8,15 @@ export type Perform = (method: string, params?: unknown, success?: string) => vo
 
 /** Executors in team order. The DeepSeek API stand-in is retired: DSH runs on its own account. */
 export const PROVIDERS: ProviderId[] = ['claude', 'codex', 'dsh'];
-export const RUN_LABELS: Record<Run['status'], string> = {
+export const RUN_LABELS: Record<RunSummary['status'], string> = {
   queued: '排队中', running: '进行中', waiting_user: '等你回应', rate_limited: '额度受限',
   stopping: '正在停止', stopped: '已停止', ended: '完成 · 待验收', completed: '已验收',
   interrupted: '运行中断', unknown: '状态待核对', failed: '没能完成',
 };
 /** A finished run awaits acceptance only when its file changes are still in place; an answer is simply done. */
-export const runLabel = (run: Pick<Run, 'status' | 'workspaceUndo'>) => run.status === 'ended' && run.workspaceUndo?.status !== 'available' ? '已完成' : RUN_LABELS[run.status];
-const ACTIVE_RUNS = new Set<Run['status']>(['running', 'waiting_user', 'rate_limited', 'stopping']);
-export const isActiveRun = (run: Run) => ACTIVE_RUNS.has(run.status) && !run.completedAt;
-
-export function statusClass(status: Run['status']) {
-  if (status === 'completed') return 'success';
-  if (status === 'failed' || status === 'unknown' || status === 'interrupted') return 'danger';
-  if (status === 'ended' || status === 'waiting_user' || status === 'rate_limited') return 'attention';
-  return ACTIVE_RUNS.has(status) ? 'active' : 'muted';
-}
+export const runLabel = (run: Pick<RunSummary, 'status' | 'workspaceUndo'>) => run.status === 'ended' && run.workspaceUndo?.status !== 'available' ? '已完成' : RUN_LABELS[run.status];
+const ACTIVE_RUNS = new Set<RunSummary['status']>(['running', 'waiting_user', 'rate_limited', 'stopping']);
+export const isActiveRun = (run: RunSummary) => ACTIVE_RUNS.has(run.status) && !run.completedAt;
 export function time(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
@@ -78,17 +71,6 @@ export function sessionTitle(session: Session, firstInput?: string) {
   return line.length > 22 ? `${line.slice(0, 22)}…` : line;
 }
 
-export type AccessLevel = { label: string; tone: 'full' | 'workspace' | 'readonly'; detail: string };
-/** The permission level a session's next turn runs with, from the session and the member's settings. */
-export function accessLevel(session: Session, settings: Settings, executors: AcpExecutor[] = []): AccessLevel {
-  if (!session.writeMode || session.provider === 'deepseek') return { label: '只读', tone: 'readonly', detail: '这个会话只读：可以阅读和讨论，不修改文件。' };
-  const connected = executors.find(item => item.id === session.provider);
-  if (connected) return { label: `外接程序${connected.permissions.commands === 'ask' ? ' · 操作需审批' : connected.permissions.commands === 'deny' ? ' · 不执行命令' : ''}`, tone: 'workspace', detail: '在本次会话的工作副本里工作；AIROOM 只能处理它主动发来的操作请求，它自己的工具规则仍然有效。' };
-  const permissions = settings.permissions[session.provider];
-  const strict = permissions.commands === 'ask' ? ' · 命令需审批' : permissions.commands === 'deny' ? ' · 不执行命令' : '';
-  if (permissions.fileScope === 'any') return { label: `完全访问${strict}`, tone: 'full', detail: '以你的 Windows 用户权限工作，可以修改工作副本以外的文件；不申请管理员权限。' };
-  return { label: `工作区${strict}`, tone: 'workspace', detail: '文件修改限制在本次会话的工作区内。' };
-}
 
 export function greeting(date = new Date()) {
   const hour = date.getHours();
@@ -119,4 +101,3 @@ export function IconButton({ label, children, onClick, disabled, className = '' 
 export function Empty({ icon, title, children }: { icon: ReactNode; title: string; children?: ReactNode }) {
   return <div className="small-empty"><span className="empty-symbol">{icon}</span><strong>{title}</strong>{children && <p>{children}</p>}</div>;
 }
-export const providerName = (id: ProviderId) => PROVIDER_NAMES[id];

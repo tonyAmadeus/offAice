@@ -1,3 +1,4 @@
+import {readableContent} from '../shared/content-presentation';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { ArrowDown, BookmarkPlus, Columns2, Copy, Download, MoreHorizontal, Reply, Unlink, Eraser, FileStack, Layers, LoaderCircle, MessageSquarePlus, MessagesSquare, Send, SmilePlus, Sparkles, StopCircle, Trash2 } from 'lucide-react';
 import type { Attachment, RoomHistory, RoomId, RoomMessage, RoomThread, Snapshot } from '../shared/types';
@@ -135,7 +136,6 @@ export function RoomView({ snapshot, invoke: rawInvoke, onOpenSession, split, fo
   const usable = invited.map(id => team.members.find(member => member.id === id)).filter((member): member is TeamMember => Boolean(member && ready(member.executor)));
   const [mode, setMode] = useState<'chat' | 'meeting'>('chat');
   const discussion = state.mode === 'discuss' ? state.discussion : undefined;
-  const handMemberCount = discussion && discussion.phase !== 'idle' ? discussion.members.length : usable.length;
   const [handRaise, setHandRaise] = useState(false);
   const [hostPick,setHostPick]=useState(true);
   // 闲聊 is an open-ended chat without a budget; 开会 is a discussion that closes once the topic is handled.
@@ -431,7 +431,7 @@ export function RoomView({ snapshot, invoke: rawInvoke, onOpenSession, split, fo
         if (message.system || message.author === 'system') return message.link ? <RoomNote key={message.id} message={message} snapshot={snapshot} invoke={invoke} archived={archived} onOpen={(projectId, sessionId) => onOpenSession?.(projectId, sessionId)} /> : <div key={message.id} className="room-system" data-message-id={message.id}>{message.text}</div>;
         if (message.discussionControl) return null;
         const streamed = live.get(message.id) ?? '';
-        const text = message.status === 'speaking' ? message.discussionId ? streamed : isRoomPass(streamed) || roomMarkerPending(streamed) || roomReaction(streamed) ? '' : streamed || message.text : message.text;
+        const text = message.status === 'speaking' ? message.discussionId ? streamed : isRoomPass(streamed) || roomMarkerPending(streamed) || roomReaction(streamed) ? '' : streamed || message.text : message.author==='user'?message.text:readableContent(message.text);
         const card = surface?.renderMessage?.(message,text)??personal?.renderMessage?.(message)??(project?.renderFlow && (message.flowPlan || message.flowDecision || message.flowReport || message.jointReview || message.roundtable) ? project.renderFlow(message) : undefined);
         if (card) return <div key={message.id} className={`room-line flow-line member-${message.author}${enter(message)}`} data-message-id={message.id}>{message.author === 'user' ? <UserAvatar name={name(message)} avatar={profile.avatar} size={30} /> : <Avatar member={team.get(message.author)} id={message.author} size={30} />}<div className="flow-line-body"><span className="room-meta"><strong>{name(message)}</strong><time>{time(message.at)}</time></span><ErrorBoundary area="汇报消息" compact>{card}</ErrorBoundary></div></div>;
         // A reaction-only turn shows on the message it answered, not as a line of its own.
@@ -451,7 +451,7 @@ export function RoomView({ snapshot, invoke: rawInvoke, onOpenSession, split, fo
         const silent = message.error ?? (unknown ? '成员程序结束了这一轮，但没有返回内容，结果待核对。可能是登录失效或连接中断，可在“设置与连接”检查这位成员。工作台不会自动重发。' : run?.error ?? '（没有说话）');
         return <div key={message.id} className={`room-line member-${member?.id ?? 'claude'}${enter(message)}`} data-message-id={message.id}>
           {member ? <Avatar member={member} size={36} mood={message.status === 'speaking' ? 'working' : undefined} /> : <span className="room-retired-avatar" aria-hidden="true">{[...name(message)][0]}</span>}
-          <div className="room-bubble-wrap"><span className="room-meta"><strong>{name(message)}</strong><time title={run ? effectiveConfigText(run.requestedConfig, run.effectiveConfig) : undefined}>{time(message.at)}</time>{personal && actual && <span className="room-model" title="这一轮实际使用的模型与思考程度">{actual}</span>}{message.inReplyTo && <span className="room-reply-to">回复 {messages.find(m => m.id === message.inReplyTo)?.authorName ?? '较早的消息'}</span>}{message.kind === 'summary' && <em>会议总结</em>}{message.status === 'failed' && <em className="room-failed">{unknown ? '结果待核对' : '没能说完'}</em>}{message.status === 'stopped' && <em>已停止</em>}</span>
+          <div className="room-bubble-wrap"><span className="room-meta"><strong>{name(message)}</strong><time title={run ? effectiveConfigText(run.requestedConfig, run.effectiveConfig) : undefined}>{time(message.at)}</time>{personal && actual && <span className="room-model" title="这一轮实际使用的模型与思考程度">{actual}</span>}{message.inReplyTo && <span className="room-reply-to">回复 {messages.find(m => m.id === message.inReplyTo)?.authorName ?? '较早的消息'}</span>}{message.kind === 'summary' && <em>会议总结</em>}{message.status === 'failed' && <em className="room-failed">{unknown ? '结果待核对' : run?.delivery==='prepared' ? '未发送' : '回复失败'}</em>}{message.status === 'stopped' && <em>已停止</em>}</span>
             <div className={`room-bubble ${message.status === 'speaking' && !text ? 'typing' : ''} ${folded ? 'folded' : ''}`} onContextMenu={message.status === 'speaking' ? undefined : event => openMessageMenu(event, messageMenu(message, canReply))}>{text ? <Markdown text={text} /> : message.status === 'speaking' ? <span className="typing-dots"><i /><i /><i /></span> : <span className="room-silent">{silent}</span>}</div>
             {long && <button type="button" className="link-button room-fold-button" aria-expanded={!folded} onClick={() => setExpanded(previous => { const next = new Set(previous); if (next.has(message.id)) next.delete(message.id); else next.add(message.id); return next; })}>{folded ? '展开全文' : '收起'}</button>}
             {message.imageGeneration&&message.status==='speaking'&&!message.generatedImages?.length&&<small className="room-reply-note">正在生成图片，可以随时停止。</small>}

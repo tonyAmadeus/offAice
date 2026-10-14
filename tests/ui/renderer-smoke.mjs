@@ -26,7 +26,7 @@ try {
   const snapshot = {
     projects: [{ id:'p', name:'界面验收项目', directory:'C:\\workspace\\project', createdAt:now, collaborationPaused:false }],
     sessions: [{ id:'s', projectId:'p', provider:'codex', title:'检查任务与实时介入', createdAt:now, updatedAt:now, revision:1, writeMode:false, workspace:'C:\\workspace\\project', workspaceKind:'original' }],
-    runs:[{ id:'r', sessionId:'s', projectId:'p', provider:'codex', revision:1, status:'running', input:'检查工作区并给出实施计划，先等我确认方向。', createdAt:now, updatedAt:now, bootId:'test', delivery:'confirmed' }],
+    runs:[{ id:'r', sessionId:'s', projectId:'p', provider:'codex', revision:1, status:'running', inputPreview:'检查工作区并给出实施计划，先等我确认方向。',inputLength:21, createdAt:now, updatedAt:now, bootId:'test', delivery:'confirmed' }],
     events:[{ id:'e1', runId:'r', sessionId:'s', provider:'codex', at:now, kind:'delta', text:'已读取项目结构。接下来会检查现有约束，并整理需要你确认的实施顺序。', fidelity:'native' }, { id:'e2', runId:'r', sessionId:'s', provider:'codex', at:now, kind:'plan', text:'1. 查看现有项目文件\n2. 核对任务要求\n3. 提交计划，等待方向确认', fidelity:'native' }],
     approvals:[], providers:[{id:'codex',name:'Codex', available:true, auth:'subscription', detail:'测试环境认证响应', capabilities:{steer:true,cancel:'native',streaming:true,write:true,history:true}, checkedAt:now}],
     collaborations:[], settings, backendReady:true, dataDirectory:'C:\\test\\data', deepseekKeyConfigured:false,

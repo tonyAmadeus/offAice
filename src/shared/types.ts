@@ -298,6 +298,8 @@ export interface Run {
   automatic?: import('./automation').AutomaticOrigin;
   flowOperationId?: string;
 }
+/** A run as the workbench receives it: a short task preview instead of the full prompt; `run.inputs` loads the full text. */
+export type RunSummary = Omit<Run, 'input' | 'executorIdentity' | 'bootId' | 'nativeTurnId'> & { inputPreview: string; inputLength: number };
 export interface TimelineEvent {
   id: string; runId: string; sessionId: string; provider: ProviderId; at: string;
   kind: EventKind; text: string; data?: unknown; fidelity: 'native' | 'derived' | 'lossy';
@@ -328,7 +330,7 @@ export interface Snapshot {
   projectFlows?: import('./project-flow').FlowOverview[];
   jointReviews?: {id:string;projectId:string;revision:number;status:import('./joint-review').JointReview['status'];stage:import('./joint-review').JointStage;dispatchMode:'running'|'paused';needsUser:boolean;quotaWaiting?:boolean}[];
   attention?: import('./attention').AttentionSummary;
-  projects: Project[]; sessions: Session[]; runs: Run[]; events: TimelineEvent[];
+  projects: Project[]; sessions: Session[]; runs: RunSummary[]; events: TimelineEvent[];
   approvals: Approval[]; providers: ProviderInfo[]; settings: Settings;
   collaborations: Collaboration[]; dataDirectory: string; backendReady: boolean;
   /** Changes only when a backup replaces the local database; separates stale browser drafts. */
@@ -342,6 +344,8 @@ export interface Snapshot {
   removedMembers?: MemberIdentity[];
   /** Programs connected over ACP; absent in snapshots from older backends. */
   executors?: AcpExecutor[]; profile: UserProfile;
+  /** Explicitly disconnected built-in programs; retained across restarts. */
+  removedProviders?: ProviderId[];
   /** Shared by all character cards using the same executor account. */
   quotas?: Partial<Record<ProviderId, MemberQuota>>;
   automation?: import('./automation').AutomationSnapshot;

@@ -33,6 +33,6 @@ test('inherited daily account and host variables cannot select ordinary test log
 test('real-account diagnostics fail before touching a profile without explicit consent and a closed app', () => {
   assert.throws(() => assertRealAccountConsent([]), /真实登录/);
   assert.throws(() => assertRealAccountConsent(['--use-real-account']), /退出 AIROOM/);
-  assert.throws(() => assertRealAccountConsent(['--app-closed']), /主人同意/);
+  assert.throws(() => assertRealAccountConsent(['--app-closed']), /账号所有者同意/);
   assert.doesNotThrow(() => assertRealAccountConsent(['--use-real-account', '--app-closed']));
 });

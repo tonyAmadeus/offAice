@@ -6,7 +6,7 @@ const finding={id:'actual-id',location:'稿件',kind:'verified' as const,severit
 test('optional empty fields default without inventing evidence or relaxing versions',()=>{
   assert.deepEqual(validateJointOpinion({summary:'未发现问题'}).findings,[]);
   assert.deepEqual(validateJointSummary({summary:'无问题，保留未核实事项'},[],[]).dispositions,[]);
-  assert.throws(()=>validateJointSummary({summary:'漏掉实际问题'},[finding],[]),/每条问题/);
+  const incomplete=validateJointSummary({summary:'漏掉实际问题'},[finding],[]);assert.equal(incomplete.dispositions[0].findingId,finding.id);assert.equal(incomplete.dispositions[0].action,'defer');assert.ok(incomplete.replyNotes?.length);
   assert.equal(validateJointVerification({outcome:'inconclusive',summary:'无法核实'},['actual-id']).findingIds[0],'actual-id');
   assert.throws(()=>validateJointVerification({outcome:'confirmed',summary:'声称已核实'},['actual-id']),/验证依据/);
   assert.throws(()=>parseReply(JSON.stringify({protocol:'airoom.project-flow',version:2,kind:'plan',payload:{}}),'plan'),/不匹配/);

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { chromium, expect } from '@playwright/test';
 import { createServer } from '../../scripts/ui-test-server.mjs';
-import { Engine } from '../../src/backend/engine.ts';
+import { Engine } from '../helpers/seeded-engine.ts'; // Scenarios opt into the built-in team; production starts empty.
 import { BackupRestorer } from '../../src/backend/backup-restore.ts';
 import { createBackup } from '../../src/backend/backup.ts';
 

@@ -1,17 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  Activity, AlertCircle, ArrowUpRight, FolderX, GitMerge, ChevronRight, CircleHelp, Clock3, Code2, Copy, FileCode2, FilePlus2,
-  FileText, FolderOpen, GitCompareArrows, Info, LoaderCircle, MessageSquare, Pause, PencilLine, Play, Plus,
-  RefreshCw, Search, ShieldCheck, Sparkles, Square, Terminal, Undo2,
-} from 'lucide-react';
-import type { Approval, Artifact, Collaboration, MemberPermissions, ProviderInfo, Run, Session, TimelineEvent } from '../shared/types';
+  FileText, Info, LoaderCircle, MessageSquare, PencilLine, Plus,
+  Sparkles, Square, Terminal, } from 'lucide-react';
+import type { Approval, Collaboration, MemberPermissions, ProviderInfo, Session, TimelineEvent } from '../shared/types';
 import { Markdown } from './Markdown';
 import { Avatar, useTeam, type TeamMember } from './members';
-import { Modal } from './modals';
-import { WorkspaceUndoDialog } from './workspace-undo';
 import { prettyCommand, thinkingSegments } from './timeline';
-import { Empty, IconButton, runLabel, bytes, errorText, statusClass, time, type Invoke, type Notify, type Perform } from './ui';
-import { terminalText } from '../shared/display-text';
+import { Empty, time, type Invoke, type Perform } from './ui';
 
 export function PlanPanel({ events, session, provider, claudeFileScope, collaborations, onCollaboration, perform,projectWork=false }: {
   events: TimelineEvent[]; session?: Session; provider?: ProviderInfo; claudeFileScope: MemberPermissions['fileScope']; collaborations: Collaboration[]; onCollaboration: () => void; perform: Perform;
@@ -36,118 +31,8 @@ export function PlanPanel({ events, session, provider, claudeFileScope, collabor
   </>;
 }
 
-function eventIcon(kind: TimelineEvent['kind']) {
-  if (kind === 'tool') return <Terminal size={13} />;
-  if (kind === 'output') return <Code2 size={13} />;
-  if (kind === 'error' || kind === 'warning') return <AlertCircle size={13} />;
-  if (kind === 'approval') return <ShieldCheck size={13} />;
-  if (kind === 'question') return <CircleHelp size={13} />;
-  if (kind === 'plan' || kind === 'reasoning') return <Sparkles size={13} />;
-  if (kind === 'usage') return <Activity size={13} />;
-  return <Clock3 size={13} />;
-}
-const EVENT_LABELS: Record<TimelineEvent['kind'], string> = { message: '成员输出', delta: '实时输出', reasoning: '公开摘要', plan: '计划', tool: '工具操作', output: '执行输出', approval: '权限请求', question: '提问', status: '执行状态', usage: '使用情况', warning: '提醒', error: '错误', session: '会话记录', image: '生成图片' };
 
-/** One-line, human-readable form of a tool event: commands lose their PowerShell wrapper. */
-export function toolLine(event: TimelineEvent) {
-  const first = event.text.split('\n')[0] ?? '';
-  const match = first.match(/^(开始|结束|调用)：([\s\S]*)$/);
-  return match ? `${match[1]}：${prettyCommand(match[2])}` : prettyCommand(first);
-}
 
-export function ActivityPanel({ events, runs }: { events: TimelineEvent[]; runs: Run[] }) {
-  const activities = events.filter(event => event.kind !== 'delta' && event.kind !== 'message');
-  const [filter, setFilter] = useState<'all' | 'tools' | 'alerts'>('all');
-  const visible = activities.filter(event => filter === 'all' || (filter === 'tools' ? ['tool', 'output'].includes(event.kind) : ['warning', 'error', 'approval', 'question'].includes(event.kind)));
-  return <>
-    <div className="activity-filter">{([['all', '全部'], ['tools', '执行'], ['alerts', '提醒']] as const).map(([id, label]) => <button key={id} className={filter === id ? 'selected' : ''} onClick={() => setFilter(id)}>{label}</button>)}</div>
-    {!visible.length ? <Empty icon={<Activity size={22} />} title="还没有活动记录">工具操作、执行状态和错误会在这里显示。</Empty> : <div className="activity-timeline">{visible.map(event => <details className={`activity-item ${event.kind}`} key={event.id}><summary><span className="activity-icon">{eventIcon(event.kind)}</span><div><div className="activity-item-heading"><strong>{EVENT_LABELS[event.kind]}</strong><time>{time(event.at)}</time></div><span className="activity-preview">{event.kind === 'tool' ? toolLine(event) : terminalText(event.text).split('\n')[0] || EVENT_LABELS[event.kind]}</span></div><ChevronRight size={12} /></summary><div className="activity-detail"><pre>{terminalText(event.text)}</pre>{event.data != null && <details className="raw-details"><summary>查看结构化记录</summary><pre>{typeof event.data === 'string' ? event.data : JSON.stringify(event.data, null, 2)}</pre></details>}<span className="fidelity-label">{event.fidelity === 'native' ? '成员程序记录' : event.fidelity === 'derived' ? '工作台整理的记录' : '信息简化记录'}</span></div></details>)}</div>}
-    {runs.length > 0 && <div className="activity-run-summary"><div className="panel-section-title">任务记录<span>{runs.length}</span></div>{runs.map(run => <div key={run.id}><span>{time(run.createdAt)}</span><strong className={statusClass(run.status)}>{runLabel(run)}</strong><small>方向 {run.revision}</small></div>)}</div>}
-  </>;
-}
-
-type Change = 'added' | 'modified' | 'deleted';
-/** File states from the workspace diff summary ("新增/修改/删除 path" lines). */
-export function parseChanges(text: string) {
-  const changes = new Map<string, Change>();
-  for (const line of text.split('\n')) {
-    const match = line.match(/^(新增|修改|删除) (.+)$/);
-    if (match) changes.set(match[2].replace(/\\/g, '/'), match[1] === '新增' ? 'added' : match[1] === '修改' ? 'modified' : 'deleted');
-  }
-  return changes;
-}
-const CHANGE_LABEL: Record<Change, string> = { added: '新增', modified: '修改', deleted: '删除' };
-
-function DiffView({ text }: { text: string }) {
-  return <pre className="diff-preview">{text.split('\n').map((line, index) => {
-    const tone = /^(\+\+\+|---)/.test(line) ? 'meta' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : line.startsWith('@@') ? 'hunk' : /^(diff --git|index |新增 |修改 |删除 )/.test(line) ? 'meta' : '';
-    return <span className={`diff-line ${tone}`} key={index}>{line || ' '}{'\n'}</span>;
-  })}</pre>;
-}
-
-export function FilesPanel({ session, invoke, eventsCount, notify, busy = false, onApply, onDiscard }: { session?: Session; invoke: Invoke; eventsCount: number; notify: Notify; busy?: boolean; onApply?: () => void; onDiscard?: () => void }) {
-  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [changes, setChanges] = useState<Map<string, Change>>(new Map());
-  const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState('');
-  const [onlyChanged, setOnlyChanged] = useState(true);
-  const [preview, setPreview] = useState<{ title: string; content: string; truncated?: boolean; diff?: boolean; path?: string } | null>(null);
-  const [error, setError] = useState('');
-  const [undoOpen,setUndoOpen]=useState(false);
-  const load = useCallback(async () => {
-    if (!session) { setArtifacts([]); setChanges(new Map()); return; }
-    setLoading(true); setError('');
-    try {
-      const [files, diff] = await Promise.all([invoke<Artifact[]>('artifact.list', { sessionId: session.id }), invoke<{ text: string }>('project.diff', { sessionId: session.id }).catch(() => ({ text: '' }))]);
-      setArtifacts(files); setChanges(parseChanges(diff?.text ?? ''));
-    } catch (failure) { setError(errorText(failure)); }
-    finally { setLoading(false); }
-  }, [session?.id, invoke]);
-  useEffect(() => { setPreview(null); setUndoOpen(false); setQuery(''); void load(); }, [session?.id, load]);
-  // Changes can arrive in a burst; request a file list only after the stream settles.
-  useEffect(() => { if (!session || !eventsCount) return; const timer = window.setTimeout(() => void load(), 1800); return () => window.clearTimeout(timer); }, [eventsCount, session?.id, load]);
-  async function read(file: Artifact) {
-    try {
-      const result = await invoke<{ content: string; language: string; truncated: boolean }>('artifact.read', { sessionId: session?.id, relativePath: file.relativePath });
-      setPreview({ title: file.relativePath, content: result.content, truncated: result.truncated, path: file.relativePath });
-    } catch {}
-  }
-  async function diff() {
-    try { const result = await invoke<{ text: string }>('project.diff', { sessionId: session?.id }); setPreview({ title: '项目文件差异', content: result.text || '当前没有可显示的文件差异。', diff: true }); } catch {}
-  }
-  async function openFile(relativePath: string) {
-    try { const result = await invoke<{ detail?: string }>('artifact.open', { sessionId: session?.id, relativePath }); if (result?.detail) notify(result.detail); } catch {}
-  }
-  // AIROOM's own bookkeeping (.airoom/) is not a member's output.
-  const all = artifacts.filter(item => !item.directory && !item.relativePath.replace(/\\/g, '/').startsWith('.airoom/'));
-  const changeOf = (file: Artifact) => changes.get(file.relativePath.replace(/\\/g, '/'));
-  const changedCount = all.filter(changeOf).length;
-  const files = all.filter(item => (!onlyChanged || !changes.size || changeOf(item)) && item.relativePath.toLowerCase().includes(query.toLowerCase()))
-    .sort((a, b) => Number(Boolean(changeOf(b))) - Number(Boolean(changeOf(a))));
-  const deleted = [...changes].filter(([, kind]) => kind === 'deleted').map(([path]) => path);
-  return <>
-    {session && <div className="workspace-card">
-      <FolderOpen size={16} />
-      <span><strong>{session.workspaceKind === 'worktree' ? '独立工作副本' : session.workspaceKind === 'copy' ? '独立目录副本' : session.writeMode ? '独立工作副本' : '项目工作区'}</strong><small title={session.workspace}>{session.workspace ?? (session.writeMode ? '下一轮任务开始时，从项目当前的样子建立' : '只读会话直接查看项目')}</small></span>
-      <button className="button small secondary" disabled={!session.workspace} onClick={() => void invoke('workspace.open', { sessionId: session.id }).catch(() => {})}>打开文件夹</button>
-    </div>}
-    {session?.workspace && session.workspaceKind && session.workspaceKind !== 'original' && <div className="workspace-actions">
-      <button className="button small primary" disabled={busy || !changes.size} title={busy ? '任务结束后才能应用' : '把副本里的改动写回项目；有冲突时不会写入任何文件'} onClick={onApply}><GitMerge size={13} />应用到项目</button>
-      <button className="button small quiet danger" disabled={busy} title="删除这个工作副本，项目不受影响" onClick={onDiscard}><FolderX size={13} />丢弃副本</button>
-      <button className="button small secondary" disabled={busy} title="查看最近一轮的还原点，并撤销它在工作副本里的改动" onClick={()=>setUndoOpen(true)}><Undo2 size={13}/>撤销最近一轮</button>
-    </div>}
-    <div className="files-toolbar">
-      <span>{changes.size ? `${changedCount} 个改动 · 共 ${all.length} 个文件` : `${all.length} 个文件`}</span>
-      <div>{changes.size > 0 && <button className={`chip-toggle ${onlyChanged ? 'selected' : ''}`} onClick={() => setOnlyChanged(!onlyChanged)}>只看改动</button>}<IconButton label="查看项目文件差异" onClick={() => void diff()} disabled={!session}><GitCompareArrows size={15} /></IconButton><IconButton label="刷新产出文件" onClick={() => void load()} disabled={loading || !session}><RefreshCw size={14} className={loading ? 'spin' : ''} /></IconButton></div>
-    </div>
-    {undoOpen&&session&&<WorkspaceUndoDialog session={session} invoke={invoke} notify={notify} onClose={()=>setUndoOpen(false)} onDone={()=>{setUndoOpen(false);void load();}}/>}
-    {all.length > 6 && <label className="file-search"><Search size={13} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="查找文件" aria-label="查找产出文件" /></label>}
-    {error && <div className="inline-notice error"><AlertCircle size={14} /><span>{error}</span></div>}
-    {!files.length ? <Empty icon={<FileText size={22} />} title={loading ? '正在读取文件' : '产出会留在这里'}>{session ? '这里列出工作区的实际文件，验收前可以核对差异。' : '选择一个会话查看产出。'}</Empty> : <div className="file-list">{files.map(file => { const change = changeOf(file); return <button className={`file-row ${change ?? ''}`} key={file.relativePath} onClick={() => void read(file)}>{change === 'added' ? <FilePlus2 size={17} /> : <FileCode2 size={17} />}<span><strong>{file.name}{change && <em className={`change-badge ${change}`}>{CHANGE_LABEL[change]}</em>}</strong><small title={file.relativePath}>{file.relativePath}</small></span><i>{bytes(file.size)}</i><ChevronRight size={12} /></button>; })}</div>}
-    {deleted.length > 0 && <div className="inline-notice"><Info size={14} /><span>已删除：{deleted.join('、')}</span></div>}
-    {preview && <Modal title={preview.title} subtitle={preview.diff ? '来自当前工作区的实际差异' : changes.get(preview.title.replace(/\\/g, '/')) === 'added' ? '新增文件 · 只读预览' : '只读文本预览'} onClose={() => setPreview(null)} className="preview-modal"><div className="file-preview">{preview.truncated && <div className="inline-notice"><Info size={14} /><span>文件较大，当前预览已截断；打开文件可以查看完整内容。</span></div>}{preview.diff ? <DiffView text={preview.content} /> : <pre>{preview.content}</pre>}</div><div className="modal-footer"><button className="button quiet" onClick={() => { void navigator.clipboard.writeText(preview.content).then(() => notify('已复制预览内容。')).catch(failure => notify(errorText(failure), true)); }}><Copy size={14} />复制内容</button>{preview.path && <button className="button primary" onClick={() => preview.path && void openFile(preview.path)}><ArrowUpRight size={14} />打开文件</button>}</div></Modal>}
-  </>;
-}
 
 interface QuestionView { key: string; question: string; header?: string; options: { label: string; description?: string }[]; multiSelect?: boolean }
 function questionsFor(approval: Approval): QuestionView[] {
@@ -162,17 +47,7 @@ function questionsFor(approval: Approval): QuestionView[] {
   }));
 }
 
-export function ApprovalsPanel({ approvals, invoke, member }: { approvals: Approval[]; invoke: Invoke; member?: TeamMember }) {
-  if (!approvals.length) return <Empty icon={<ShieldCheck size={24} />} title="现在不需要你回应">权限请求和成员提问会出现在这里，也会出现在对话里。已过期的请求不会再执行。</Empty>;
-  return <div className="approvals-list">{approvals.map(approval => <ApprovalCard key={approval.id} approval={approval} invoke={invoke} member={member} />)}</div>;
-}
 
-export function AutoApproveChip({ session, invoke }: { session: Session; invoke: Invoke }) {
-  const rules = session.approvalRules ?? [];
-  if (!session.autoApprove && !rules.length) return null;
-  const label = session.autoApprove ? '自动批准：全部' : `自动批准：${rules.map(rule => rule === 'command' || rule === 'Bash' || rule === 'pwsh' ? '执行命令' : rule === 'fileChange' ? '修改文件' : rule).join('、')}`;
-  return <span className="auto-approve-chip"><ShieldCheck size={11} />{label}<button type="button" title="关闭会话自动批准；正在自动执行的 Codex 完全访问轮次会停止。成员基本权限仍由设置决定。" onClick={() => { void invoke('session.approvals', { sessionId: session.id, autoApprove: false, clearRules: true }).catch(() => {}); }} aria-label="关闭本会话的自动批准">关闭</button></span>;
-}
 
 const ALLOW = /allow|accept|approve|answer|允许|批准|提交|同意/i;
 const DENY = /deny|decline|reject|cancel|拒绝|取消/i;
@@ -249,4 +124,3 @@ export function ApprovalCard({ approval, invoke, compact = false, member }: { ap
   </div>;
 }
 
-export function LoadingLine() { return <span className="loading-line"><LoaderCircle size={13} className="spin" /></span>; }

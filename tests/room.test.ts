@@ -66,7 +66,7 @@ test('room exports retain speaker identities, timestamps, summary labels and rea
   assert.match(exported,/归档时间/);assert.match(exported,/2026/);assert.match(exported,/结论正文/);assert.doesNotMatch(exported,/\[PASS\]/);
 });
 
-test('room exports name attachments and generated images so the Markdown can be traced back to the files',()=>{
+test('room exports readable attachment names without internal storage paths',()=>{
   const thread:RoomThread={id:'t',title:'图片',createdAt:'2026-10-04T02:00:00Z'};
   const at=thread.createdAt;
   const messages:RoomMessage[]=[
@@ -74,8 +74,8 @@ test('room exports name attachments and generated images so the Markdown can be 
     {id:'2',author:'codex',text:'已生成',at,status:'done',generatedImages:[{id:'g1',name:'AIROOM-图片.png',kind:'image',mime:'image/png',size:20,nativeItemId:'n',nativeTurnId:'t',generatedAt:at}]},
   ];
   const exported=roomMarkdown(thread,messages,id=>id);
-  assert.ok(exported.includes('> 附件：草图.png（资料目录 attachments/a1/）'));
-  assert.ok(exported.includes('> 生成的图片：AIROOM-图片.png（资料目录 attachments/g1/）'));
+  assert.ok(exported.includes('> 附件：草图.png'));
+  assert.ok(exported.includes('> 生成的图片：AIROOM-图片.png'));assert.doesNotMatch(exported,/attachments\/a1|attachments\/g1/);
 });
 
 test('recovery folds a completed optional PASS but reports a required PASS without automatically retrying',async t=>{

@@ -327,3 +327,13 @@ test('ZCode completed installation rejects changed entry, missing dependencies, 
     await rm(path.join(linked,'resources/glm'),{force:true});
   }finally{if((await lstat(path.join(prefix,'resources/glm')).catch(()=>undefined))?.isSymbolicLink())await rm(path.join(prefix,'resources/glm'),{force:true});assert.equal(path.dirname(directory),root);await rm(directory,{recursive:true,force:true});}
 });
+
+
+test('ZCode sends long quoted multilingual input through stdin before the untouched official CLI reads argv',async()=>{
+  const f=await fixture();try{
+    const prompt='会议材料「中文」 "quoted" \\path 😀\n'.repeat(2400);
+    assert.ok(prompt.length>32767);const result=await f.adapter.start(f.context,prompt);
+    assert.equal(result.failure,undefined);assert.deepEqual(f.deliveries,['sent','confirmed']);
+    const call=(await f.calls())[0],actual=call.args[call.args.indexOf('-p')+1];assert.equal(actual.slice(-prompt.length),prompt);assert.match(actual.slice(0,actual.length-prompt.length),/人物设定\n\n$/);
+  }finally{await f.cleanup();}
+});

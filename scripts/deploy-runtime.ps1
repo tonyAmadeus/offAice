@@ -4,13 +4,14 @@
 # MSIX-packaged hosts (Claude and Codex desktop apps) silently redirect AppData writes
 # into their private package cache, invisible to Explorer.
 # -Backup first backs up the user's data; the owner asks for it explicitly (npm run deploy -- -Backup).
-param([string]$Target = (Join-Path $env:USERPROFILE 'AIROOM'), [switch]$Backup)
+# The daily program lives in the desktop AIROOM folder (moved from %USERPROFILE%\AIROOM on 2026-10-13); shortcuts point there.
+param([string]$Target = (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'AIROOM'), [switch]$Backup)
 $ErrorActionPreference = 'Stop'
 $tokenGroups = & "$env:SystemRoot\System32\whoami.exe" /groups /fo csv /nh
 $integrity = [regex]::Matches(($tokenGroups -join "`n"), 'S-1-16-(\d+)\b')
 if ($LASTEXITCODE -ne 0 -or $integrity.Count -ne 1 -or [int]$integrity[0].Groups[1].Value -lt 8192) { throw 'Deployment requires a normal-integrity Windows session outside the Codex sandbox.' }
 $Target = [IO.Path]::GetFullPath($Target).TrimEnd('\')
-$expectedTarget = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE 'AIROOM')).TrimEnd('\')
+$expectedTarget = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'AIROOM')).TrimEnd('\')
 if (-not $Target.Equals($expectedTarget, [StringComparison]::OrdinalIgnoreCase)) { throw "Refusing mirror outside the daily runtime directory: $expectedTarget" }
 if ((Test-Path -LiteralPath $Target) -and ((Get-Item -LiteralPath $Target).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Runtime target must not be a directory junction or symbolic link.' }
 $source = Join-Path (Split-Path -Parent $PSScriptRoot) 'release\win-unpacked'

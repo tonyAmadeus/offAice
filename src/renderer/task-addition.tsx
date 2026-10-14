@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import type {ProjectFlowSnapshot,CompletionCriterion,Task} from '../shared/project-flow';
+import type {ProjectFlowSnapshot,Task} from '../shared/project-flow';
 import {criterionText,criterionKind} from '../shared/project-flow';
 import type {TaskAddition,TaskAddition as Proposal} from '../shared/project-workbench';
 import {Modal} from './modals';
