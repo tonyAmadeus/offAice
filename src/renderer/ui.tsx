@@ -13,8 +13,9 @@ export const RUN_LABELS: Record<RunSummary['status'], string> = {
   stopping: '正在停止', stopped: '已停止', ended: '完成 · 待验收', completed: '已验收',
   interrupted: '运行中断', unknown: '状态待核对', failed: '没能完成',
 };
-/** A finished run awaits acceptance only when its file changes are still in place; an answer is simply done. */
-export const runLabel = (run: Pick<RunSummary, 'status' | 'workspaceUndo'>) => run.status === 'ended' && run.workspaceUndo?.status !== 'available' ? '已完成' : RUN_LABELS[run.status];
+/** A finished run awaits acceptance only when its file changes are still in place; an answer is simply done.
+ * Project-flow runs are accepted per round on the project board, never run by run. */
+export const runLabel = (run: Pick<RunSummary, 'status' | 'workspaceUndo'> & Partial<Pick<RunSummary, 'flowOperationId'>>) => run.status === 'ended' && (run.flowOperationId || run.workspaceUndo?.status !== 'available') ? '已完成' : RUN_LABELS[run.status];
 const ACTIVE_RUNS = new Set<RunSummary['status']>(['running', 'waiting_user', 'rate_limited', 'stopping']);
 export const isActiveRun = (run: RunSummary) => ACTIVE_RUNS.has(run.status) && !run.completedAt;
 export function time(value: string) {

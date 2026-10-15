@@ -110,7 +110,7 @@ export function InviteModal({ snapshot, invoke, initialProjectId, onClose, onCre
             <Avatar member={member} size={34} ring={false} />
             <span className="collaborator-text"><strong>{member.name}</strong><small>{member.product}</small><small className={able ? 'ready' : ''}>{able ? '可以参加' : providerSummary(info)}</small></span>
             <span className="collaborator-check" aria-hidden="true">{on && <Check size={13} />}</span>
-          </label>{on&&<MemberConfigFields snapshot={snapshot} member={member.card} value={configs[member.id]??{}} invoke={invoke} onChange={value=>setConfigs(previous=>({...previous,[member.id]:value}))}/>}</div>;
+          </label>{/* Settings keep their place while unchecked, so toggling never reflows the other cards. */}{able&&<div className={`collaborator-config ${on?'':'off'}`} aria-hidden={!on} inert={!on}><MemberConfigFields snapshot={snapshot} member={member.card} value={configs[member.id]??{}} invoke={invoke} onChange={value=>setConfigs(previous=>({...previous,[member.id]:value}))}/></div>}</div>;
         })}</div></div>
       <div className="info-card"><Users size={17} /><p>进入会议室后先一起讨论要做什么。讨论清楚了，再在会议室里选一位负责人起草方案；<strong>你确认方案后才开工</strong>。</p></div>
     </div>

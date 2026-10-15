@@ -19,3 +19,19 @@ export function readableContent(text:string){
   if(!raw.startsWith('{')&&!raw.startsWith('['))return text;
   try{const value=JSON.parse(raw);return contentMarkdown(value)||'暂无可展示的正文。';}catch{return text;}
 }
+const RUN_STATUS:Record<string,string>={rate_limited:'额度用完',failed:'运行失败',blocked:'被拦下',aborted:'中途停止',unknown:'结果未知',stopped:'已停止'};
+/** Errors written for members and the program, rephrased for the person reading the card. The saved text is unchanged. */
+export function plainFlowError(text:string|undefined){
+  if(!text)return '';
+  const correction=/^格式补正([^。]*)。/.exec(text);
+  if(correction)return `成员整理回复格式时${correction[1].replace(/^不能/,'试图')}，这次整理没有被采用。`;
+  if(text.startsWith('最后的 JSON 回复不完整'))return '成员交回的结果格式不完整（常见是结尾少了括号），这次没有收下。';
+  if(text.startsWith('命令声明没有相符的实际完成记录'))return '成员写的命令在实际运行记录里找不到对应，这份意见暂未采用。';
+  const run=/^成员运行未完成：([a-z_]+)；未自动重发。$/.exec(text);
+  if(run)return run[1]==='rate_limited'?'成员的额度用完了，这次没有做完，也没有自动重发。额度恢复后可以点“接着做”。':`成员这次没有做完（${RUN_STATUS[run[1]]??run[1]}），没有自动重发。`;
+  return text;
+}
+/** Joins items that may already end in punctuation without doubling it (no “。、” or “。；”). */
+export function joinClauses(items:readonly string[],separator:string){
+  return items.map(item=>item.trim().replace(/[。；，、.;,]+$/,'')).filter(Boolean).join(separator);
+}

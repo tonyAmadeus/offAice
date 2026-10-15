@@ -251,10 +251,9 @@ export async function executeFlowTask(host: FlowTaskExecutionHost, initial: Task
                 "REQUIREMENTS_CHANGED",
                 "本轮未包含已送达的补充标准，需要按最新要求继续修正。",
               );
-            throw new FlowError(
-              "INVALID_PROTOCOL",
-              "提交必须逐项包含当前任务的全部完成标准。",
-            );
+            const missing=memberCriteria(latest.completionCriteria,host.store.profile().name).required.filter(criterion=>!payload.completionResults.some(result=>result.criterion===criterion));
+            payload.completionResults.push(...missing.map(criterion=>({criterion,verified:false,evidence:'成员未单独报告此项完成情况，需结合实际成果核对。'})));
+            payload.replyNotes=[...(payload.replyNotes??[]),'部分完成标准未单独报告，已标为待核实，原成果和说明保留。'];
           }
           return payload;
         },
@@ -314,6 +313,7 @@ export async function executeFlowTask(host: FlowTaskExecutionHost, initial: Task
         outOfScopeChanges,
         scopeExplanation: result.payload.outOfScopeExplanation,
         summary: result.payload.summary,
+        ...(result.payload.replyNotes?.length?{replyNotes:result.payload.replyNotes}:{}),
         ...(result.payload.userSummary
           ? { userSummary: result.payload.userSummary }
           : {}),

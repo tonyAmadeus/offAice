@@ -21,7 +21,7 @@ export function presentRoundReport(report: RoundReport, round: Round, integratio
   const fallback = `本轮已提交：${tasks.map(t => t.title).join('、')}。下面可以查看本轮文件；检查中的待确认事项列在验证细节中。`;
   return { ...report,
     summary: conflict || uncertainCode && numericClaim.test(report.summary) ? fallback : report.summary,
-    validationSummary: conflict ? '检查说明与实际记录存在差异，请按下方提示核对。' : uncertainCode && numericClaim.test(report.validationSummary) ? '检查已留下记录，部分退出码没有得到确认。' : report.validationSummary,
+    validationSummary: (round.manualAcceptance?.ownerNote ? '用户实测/反馈：'+round.manualAcceptance.ownerNote+'\n\n' : '') + (conflict ? '检查说明与实际记录存在差异，请按下方提示核对。' : uncertainCode && numericClaim.test(report.validationSummary) ? '检查已留下记录，部分退出码没有得到确认。' : report.validationSummary),
     systemNotes: notes.filter((n, i) => notes.findIndex(other => other.kind === n.kind && other.text === n.text) === i),
   };
 }

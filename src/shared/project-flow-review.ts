@@ -49,6 +49,13 @@ export function rejectUserCriteria(criteria:CompletionCriterion[],userName=''){
 }
 /** Preserve the member's verdict. Eligibility to advance is a separate, evidence-based outcome. */
 export function assessReview(payload:ReviewPayload,required:string[],deferred:string[]=[],previous:ReviewFinding[]=[],overruled:string[]=[],judged:string[]=[]){
+  // Defer only an explicitly unavailable interactive check, never a failed product behavior.
+  const practical = required.filter(c => payload.criteriaResults.some(r => r.criterion===c&&!r.verified&&
+    /浏览器|实机|真实设备|browser/i.test(c+' '+r.evidence)&&
+    /(?:无法|不能|不具备|没有|缺少).{0,20}(?:实操|操作|浏览器|工具|环境)|(?:需|待).{0,12}(?:用户|主人|人工).{0,12}(?:实测|操作|确认)|尚未.{0,12}(?:浏览器|实机).{0,12}(?:验证|操作)/.test(r.evidence)&&
+    !/发现.{0,8}(?:错误|缺陷)|实际失败|测试失败|复现.{0,8}(?:异常|问题)/.test(r.evidence)));
+  required=required.filter(c=>!practical.includes(c));
+  deferred=[...new Set([...deferred,...practical])];
   const negative=(payload.assessments??[]).filter(a=>judged.includes(a.criterion)&&a.rating==='not'&&a.reason.trim());
   const reasons:string[]=[],findings=payload.findings.map(f=>{const old=previous.find(p=>p.id===f.previousFindingId||f.location!=='未注明位置'&&Boolean(f.request)&&p.location===f.location&&p.request===f.request),check=old&&payload.previousFindingChecks?.find(c=>c.findingId===old.id),suppressed=old&&overruled.includes(old.id);
     const evaluative=negative.length>0&&f.kind!=='suspected'&&Boolean(f.location.trim()&&f.request.trim());
@@ -59,7 +66,7 @@ export function assessReview(payload:ReviewPayload,required:string[],deferred:st
   const unbound=payload.evidence.filter(e=>commandEvidenceProblem(e)==='missing-completion');
   const conflicting=payload.evidence.filter(e=>['exit-code-mismatch','failed-execution'].includes(commandEvidenceProblem(e)??''));
   const onlyDeferredIncomplete=deferred.length>0&&!missing.length&&payload.criteriaResults.some(r=>deferred.includes(r.criterion)&&!r.verified)&&payload.criteriaResults.filter(r=>!r.verified).every(r=>deferred.includes(r.criterion));
-  if(missing.length)reasons.push('未能核实：'+missing.join('、'));
+  if(missing.length)reasons.push('未能核实：\n'+missing.map(c=>'• '+c).join('\n'));
   if(!payload.verificationComplete&&required.length&&!onlyDeferredIncomplete)reasons.push('必要验证尚未完成。');
   if(unbound.length)reasons.push('命令缺少实际完成记录：'+unbound.map(e=>e.command).join('、'));
   if(conflicting.length)reasons.push('退出码声明与原生执行结果矛盾：'+conflicting.map(e=>e.command).join('、'));
@@ -77,8 +84,8 @@ export function assessReview(payload:ReviewPayload,required:string[],deferred:st
   else if((payload.verdict==='inconclusive'&&!(judged.length>0&&!required.length&&judged.every(c=>payload.assessments?.some(a=>a.criterion===c&&['meets','partly'].includes(a.rating)))))||reasons.length){outcome='inconclusive';}
   else outcome='pass'; // An optional-only (or empty) issue list cannot request changes.
   // A legacy "user has not accepted" is explicitly deferred. Do not invent verified=true for it.
-  if(outcome==='inconclusive'&&(!required.length&&deferred.length||onlyDeferredIncomplete)&&!reasons.length&&!unbound.length&&!payload.findings.length)outcome='pass';
-  return {outcome,reasons,findings,advice:(payload.assessments??[]).filter(a=>judged.includes(a.criterion)&&a.rating==='partly').map(a=>a.criterion+'：'+a.reason)};
+  if(outcome==='inconclusive'&&(!required.length&&deferred.length||onlyDeferredIncomplete)&&!reasons.length&&!unbound.length&&!observedDefects.length)outcome='pass';
+  return {outcome,reasons,findings,deferredUserCriteria:deferred,advice:(payload.assessments??[]).filter(a=>judged.includes(a.criterion)&&a.rating==='partly').map(a=>a.criterion+'：'+a.reason)};
 }
 
 /** A missing display title may be filled; source locations and quoted text remain exact. */
@@ -129,7 +136,10 @@ export function assertReviewMeaning(original:unknown,corrected:unknown){
     const migrated=before.evidence.length===after.evidence.length&&prior?.kind==='command'&&next.kind==='inspection'&&
       typeof prior.result==='string'&&Boolean(prior.result.trim())&&next.result.startsWith(prior.result)&&
       (next.command===undefined||next.command===prior.command)&&(next.exitCode===undefined||next.exitCode===prior.exitCode);
-    if(!unchanged&&!migrated)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正新增了验证结果声明。命令转 inspection 时须保持依据条数和顺序，并把原 result（含标点）完整保留为前缀。');
+    const uncertaintyOnly=before.evidence.length===after.evidence.length&&prior&&typeof prior.result==='string'&&next.result.startsWith(prior.result)&&
+      next.kind===prior.kind&&next.command===prior.command&&next.exitCode===prior.exitCode&&
+      /^[\s；;，,。()（）]*(?:(?:退出码|命令|执行结果|结果|依据)(?:尚)?未核实|尚未核实|未核实)[\s。；;()（）]*$/.test(next.result.slice(prior.result.length));
+    if(!unchanged&&!migrated&&!uncertaintyOnly)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正新增了验证结果声明。命令转 inspection 时须保持依据条数和顺序，并把原 result（含标点）完整保留为前缀。');
   }
   if(Array.isArray(after.previousFindingChecks))for(const item of after.previousFindingChecks){const next=item as Record<string,unknown>,prior=Array.isArray(before.previousFindingChecks)?before.previousFindingChecks.find((c:Record<string,unknown>)=>c.findingId===next.findingId):undefined;
     if(!prior||typeof prior.resolved==='boolean'&&prior.resolved!==next.resolved||prior.evidence!==next.evidence)throw new FlowError('FORMAT_MEANING_CHANGED','格式补正新增或改变了旧问题的核实结果。');

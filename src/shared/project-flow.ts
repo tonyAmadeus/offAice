@@ -52,11 +52,11 @@ export interface Plan {sourceRoundtable?:ProjectFlow['sourceRoundtable']}
 export type PlanSummary = Pick<Plan,'id'|'projectId'|'flowId'|'revision'|'version'|'parentPlanId'|'status'|'objective'|'scope'|'deliverables'|'createdAt'|'updatedAt'> & {roundCount:number;taskCount:number};
 export interface RoundReport { summary:string; completedTaskKeys:string[]; deliverables:string[]; validationSummary:string; remainingIssues:string[]; nextRoundSummary:string; userDecisionNeeded:string }
 export interface MeetingResponse {messageId:string;disposition:'noted'|'answered'|'in-scope-fix'|'scope-change'|'needs-user';summary:string;paths:string[];fixTaskId?:string;resolvedAt?:string}
-export interface RoundReport {systemNotes?:import('./round-results').ReportSystemNote[];meetingResponses?:MeetingResponse[]}
+export interface RoundReport {systemNotes?:import('./round-results').ReportSystemNote[];meetingResponses?:MeetingResponse[];replyNotes?:string[]}
 export interface Round extends FlowRecord, RoundSpec { planId:string; index:number; taskIds:string[]; predecessorRoundId?:string; baseVersion?:VersionRef; integrationId?:string; acceptanceId?:string; integrationFixCount:number; report?:RoundReport; status:'pending'|'executing'|'integrating'|'checking'|'awaiting_acceptance'|'accepted'|'changes_requested'|'blocked'; allowedActions?:AllowedAction[] }
 export interface Round {startedAt?:string;meetingReadIds?:string[];meetingHandledIds?:string[];meetingResponses?:MeetingResponse[];reportRunId?:string;reportedAt?:string}
 export interface ManualRedo {decisionId:string;memberId:string;previousMemberId:string;opinion:string;at:string;status:'pending'|'passed'|'failed'}
-export interface Round {leadMemberId?:string;requiresPeerReview?:boolean;peerReviewerMemberId?:string;manualRedos?:ManualRedo[];manualAcceptance?:{decisionId:string;reason:string};deferredUserCriteria?:string[]}
+export interface Round {leadMemberId?:string;requiresPeerReview?:boolean;peerReviewerMemberId?:string;manualRedos?:ManualRedo[];manualAcceptance?:{decisionId:string;reason:string;ownerNote?:string;source?:'user-tested'};deferredUserCriteria?:string[]}
 export interface Round {userChangeRequests?:UserChangeRequest[]}
 export interface NextTaskAdjustment {taskId:string;goal?:string;inputs?:string[];completionCriteria?:CompletionCriterion[]}
 export interface NextRoundRecommendation {mode:'as-planned'|'adjusted'|'replan';summary:string;taskAdjustments:NextTaskAdjustment[];completionCriteria?:CompletionCriterion[]}
@@ -76,12 +76,14 @@ export interface Round {peerReviewerChanges?:{previousMemberId:string;memberId:s
 export interface FileChange { path:string; kind:'added'|'modified'|'deleted' }
 export interface Submission extends FlowRecord { taskId:string; sequence:number; runId:string; sessionId:string; version:VersionRef; changes:FileChange[]; evidence:Evidence[]; completionResults?:CriteriaResult[]; outOfScopeChanges:FileChange[]; scopeExplanation?:string; summary:string; status:'capturing'|'submitted'|'superseded'|'stale'|'invalid'; changedFileCount?:number; evidenceCount?:number; outOfScopeCount?:number; allowedActions?:AllowedAction[] }
 export interface Submission { userSummary?:string; requirementsRevision?:number; staleReason?:string }
+export interface Submission {replyNotes?:string[]}
 export interface Submission {disputes?:Dispute[];disputeRulings?:DisputeRuling[];disputeRunId?:string;disputeDecisionId?:string}
 export interface Submission {disputeReturnAccounting?:DisputeReturnAccounting}
 export interface CriteriaResult { criterion:string; verified:boolean; evidence:string }
 export interface ReviewPayload { verdict:'pass'|'changes_requested'|'inconclusive'; verificationComplete:boolean; criteriaResults:CriteriaResult[]; findings:Omit<ReviewFinding,'id'>[]; evidence:Evidence[];previousFindingChecks?:FindingCheck[] }
 export interface ReviewPayload {assessments?:CriterionAssessment[];strengths?:string[]}
 export interface SubmissionPayload { userSummary?:string; summary:string; evidence:Evidence[]; completionResults:CriteriaResult[]; outOfScopeExplanation?:string;disputes?:Dispute[] }
+export interface SubmissionPayload {replyNotes?:string[]}
 export interface Review extends FlowRecord { taskId:string; submissionId:string; reviewerMemberId:string; runId?:string; disposableArtifactId?:string; reviewedVersion:VersionRef; verdict?:ReviewPayload['verdict']; criteriaResults?:CriteriaResult[]; findings:ReviewFinding[]; evidence:Evidence[]; verificationComplete:boolean; staleReason?:string; status:'queued'|'running'|'passed'|'changes_requested'|'inconclusive'|'stale'|'blocked'; findingCounts?:Record<string,number>; allowedActions?:AllowedAction[] }
 export interface Review { requirementsRevision?:number }
 export interface Review {assessments?:CriterionAssessment[];strengths?:string[]}
@@ -110,7 +112,7 @@ export interface FlowOperation { requirementsRevision?:number; supplementId?:str
 export interface FlowOperation {recovery?:'completed'|'interrupted';resumeRequested?:boolean;continuedByOperationId?:string;recoveredFromRunId?:string}
 export interface FlowOperation {jointReviewId?:string;connectionRetryRunIds?:string[]}
 export interface TaskSupplementResult { requestId:string; entityId:string; revision:number; pending:boolean; disposition:'recorded'|'current'|'next-turn'|'scope-change'|'unknown'|'new-task-required'; supplementId?:string; decisionId?:string; operationId?:string; nextAction?:'projectFlow.task.add'; requiresNewFlow?:boolean; draft?:{originTaskId:string;flowId:string;roundId:string;memberId:string;goal:string;allowedPaths:string[];sourceMessageId?:string} }
-export interface QuotaWait extends FlowRecord {targetId:string;memberId:string;stage:'task'|'review'|'integration-check'|'peer-review'|'round-report'|'adjudication'|'next-round'|'requested-check';startedAt:string;status:'waiting'|'decision'|'resolved';decisionId?:string}
+export interface QuotaWait extends FlowRecord {resetAt?:number;operationId?:string;readyToResume?:boolean;targetId:string;memberId:string;stage:'task'|'review'|'integration-check'|'peer-review'|'round-report'|'adjudication'|'next-round'|'requested-check';startedAt:string;status:'waiting'|'decision'|'resolved';decisionId?:string}
 export const QUOTA_STAGE_LABELS:Record<QuotaWait['stage'],string>={task:'执行任务',review:'个人任务复核','integration-check':'整合检查','peer-review':'整轮他人复核','round-report':'本轮汇报',adjudication:'异议裁定','next-round':'下一轮调整建议','requested-check':'用户指定的整轮检查'};
 export interface FlowStage {kind:'planning'|'executing'|'reviewing'|'integrating'|'checking'|'peer-review'|'reporting'|'decision'|'acceptance'|'quota'|'paused'|'blocked'|'completed'|'idle';label:string;roundId?:string;leadMemberId?:string}
 export interface ProjectFlowSnapshot { projectId:string; revision:number; flow:ProjectFlow|null; plan:Plan|null; plans:PlanSummary[]; rounds:Round[]; tasks:Task[]; submissions:Submission[]; reviews:Review[]; integrations:Integration[]; acceptances:Acceptance[]; decisions:Decision[]; jointReviews:JointReview[]; overview:{working:number;remaining:number;needsUser:number;stage?:FlowStage}; allowedActions:AllowedAction[] }
@@ -125,3 +127,6 @@ export const PROJECT_FLOW_READS=[...JOINT_READS,...PROGRESS_READS,...WORKBENCH_R
 export const PROJECT_FLOW_METHODS=[...JOINT_WRITES,...WORKBENCH_WRITES,...PROJECT_FLOW_READS,'projectFlow.log.write','projectFlow.start','projectFlow.plan.revise','projectFlow.plan.confirm','projectFlow.review.configure','projectFlow.round.accept','projectFlow.round.requestChanges','projectFlow.round.requestCheck','projectFlow.acceptance.recover','projectFlow.decision.answer','projectFlow.pause','projectFlow.resume','projectFlow.task.reassign','projectFlow.task.supplement','projectFlow.unknown.resolve','projectFlow.cancel'] as readonly string[];
 /** Electron IPC drops custom Error properties; return data and reconstruct it in the renderer. */
 export function unwrapProjectFlowReply<T>(reply:T):T {const failure=(reply as {__airoomFlowError?:{code:string;message:string}}|null)?.__airoomFlowError;if(failure)throw new FlowError(failure.code,failure.message);return reply;}
+
+export interface FlowCompletionReport { generatedAt:string; summary:string; rounds:{roundId:string;title:string;summary:string;deliverables:string[];validationSummary:string}[]; corrections:{taskId:string;title:string;returns:number;kind:Task['kind']}[]; userReturns:UserChangeRequest[]; roundtables:NonNullable<ProjectFlow['sourceRoundtable']>[]; remainingIssues:string[] }
+export interface ProjectFlow {completionReport?:FlowCompletionReport}

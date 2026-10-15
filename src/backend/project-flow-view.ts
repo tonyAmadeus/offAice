@@ -475,7 +475,9 @@ export class ProjectFlowView {
                 r.planId === flow.activePlanId &&
                 r.status === "awaiting_acceptance" &&
                 r.requiresUserAcceptance,
-            ).length
+            ).length +
+            // A paused task or check waits for the user just like a decision does.
+            blockedOperations.filter((o) => !o.jointReviewId).length
           : 0,
       },
       allowedActions: ongoing

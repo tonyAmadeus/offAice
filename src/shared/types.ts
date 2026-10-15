@@ -368,6 +368,8 @@ export interface AdapterContext {
   run: Run; session: Session; settings: Settings; cwd: string; env: NodeJS.ProcessEnv;
   /** Positively identified chat surfaces. Flow tasks keep their complete task briefing. */
   conversation?: 'desk' | 'room';
+  /** A project meeting room's bound project directory: room speech may read it, never change it. */
+  roomProjectDirectory?: string;
   /** Only the conversation runtime pool grants this lease; flow tasks close their process. */
   roomRuntime?: boolean;
   /** Diagnostic timing only; never adds protocol metadata to chat messages. */

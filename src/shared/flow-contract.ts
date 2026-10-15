@@ -4,9 +4,9 @@ const review=schema(['verdict','verificationComplete','criteriaResults','finding
 const opinion=schema(['summary'],['findings','unverifiedItems','proposal','evidence','userSummary']);
 export const FLOW_CONTRACTS:Record<string,ReturnType<typeof schema>>={
   plan:schema(['objective','scope','deliverables','acceptanceCriteria','rounds','tasks']),
-  submission:schema(['summary','evidence','completionResults'],['userSummary','outOfScopeExplanation','disputes']),
+  submission:schema(['summary'],['evidence','completionResults','userSummary','outOfScopeExplanation','disputes']),
   review,'integration-check':review,'peer-review':review,'requested-check':review,
-  'round-report':schema(['summary','completedTaskKeys','deliverables','validationSummary'],['remainingIssues','nextRoundSummary','userDecisionNeeded','meetingResponses']),
+  'round-report':schema(['summary'],['completedTaskKeys','deliverables','validationSummary','remainingIssues','nextRoundSummary','userDecisionNeeded','meetingResponses']),
   'next-round':schema(['mode'],['summary','taskAdjustments','completionCriteria']),
   'task-addition':schema(['completionCriteria','allowedPaths','inScope','scopeReason']),
   'task-rearrange':schema(['memberId','goal','completionCriteria','reason']),

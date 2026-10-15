@@ -6,7 +6,6 @@ import {
 } from "../shared/executor-catalog";
 import { spawnCli, type CliCommand } from "./adapters/common";
 import { waitForNpmOutput } from "./member-versions";
-import {stopOwned} from './process-supervisor';
 import {
   defaultBrowserLoginCommand,
   defaultBrowserLoginEnvironment,
@@ -75,6 +74,11 @@ export function officialExecutorLoginOutput(
     },
   };
 }
+/** Shown when an official login page is slow to appear; the attempt continues. */
+export const SLOW_LOGIN_PAGE: CatalogLoginState = {
+  phase: "waiting",
+  message: "官方登录页面还在准备，首次启动会慢一些。浏览器打开授权页后请完成授权；长时间没有打开可以取消后重试。",
+};
 export async function runOfficialExecutorLogin(
   provider: string,
   command: CliCommand,
@@ -95,8 +99,8 @@ export async function runOfficialExecutorLogin(
     args = [...args, "--no-browser"];
   const child = spawnCli(command, args, { cwd, env });
   register(child);
-  let preparationExpired=false;
-  const preparationTimer=setTimeout(()=>{preparationExpired=true;void stopOwned(child,1500).catch(()=>{});},30_000);
+  // A first start can outlast this hint; the program keeps running until the login deadline.
+  const preparationTimer=setTimeout(()=>progress?.(SLOW_LOGIN_PAGE),30_000);
   for (const stream of [child.stdout, child.stderr]) {
     const parser = officialExecutorLoginOutput(provider, (state) => {if(state.phase==='waiting')clearTimeout(preparationTimer);progress?.(state);});
     stream?.on("data", (chunk: Buffer) => parser.write(chunk));
@@ -105,7 +109,6 @@ export async function runOfficialExecutorLogin(
   // Uses the same owned-process timeout/drain guarantees as managed downloads.
   try{
     const result = await waitForNpmOutput(child, 5 * 60_000);
-    if(preparationExpired)throw new Error('官方授权页面在 30 秒内未准备好，请检查网络后重试。');
     if(result.code!==0)throw new Error('官方登录没有完成，请重试登录或检查网络。');
   }finally{clearTimeout(preparationTimer);}
 }

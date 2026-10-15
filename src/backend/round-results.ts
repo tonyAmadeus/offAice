@@ -96,6 +96,15 @@ export class RoundResultReader {
   async openPath(p: Record<string, unknown>) {
     const project = this.store.get<Project>('projects', text(p.projectId));
     if (!project) throw new FlowError('NOT_FOUND', '项目不存在。');
+    if (p.source === 'submitted') {
+      // The round's own copy kept by AIROOM: only shown in its folder, never opened or run.
+      const { round, integration } = this.context(p);
+      if (!integration?.version) throw new FlowError('NOT_FOUND', '尚无成果版本。');
+      const artifact = await this.artifact(integration.version.artifactId, project.id, round.flowId, integration.version.fingerprint);
+      const relativePath = scopePath(text(p.relativePath)), root = await fs.realpath(artifact.root), target = resolveSafePath(root, relativePath);
+      if (!(await fs.stat(target)).isFile()) throw new FlowError('NOT_FILE', '请选择本轮提交版本里的文件。');
+      return { root, relativePath, target, mode: 'reveal' as const, source: 'submitted' as const };
+    }
     if (p.roundId !== undefined && !this.context(p).applied) throw new FlowError('NOT_APPLIED', '尚未确认写入项目，不能打开项目当前文件。');
     const relativePath = scopePath(text(p.relativePath)), mode = p.mode;
     if (mode !== 'open' && mode !== 'reveal') throw new FlowError('INVALID_REQUEST', '打开方式无效。');

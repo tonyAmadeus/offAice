@@ -2,7 +2,7 @@ import {applySnapshotPatch,acceptSnapshot} from '../shared/snapshot-sync';
 import { OPENABLE_DOCUMENT } from '../shared/round-results';
 import { catalogEntry, catalogProvider } from '../shared/executor-catalog';
 import { app, BrowserWindow, dialog, ipcMain, shell, screen, utilityProcess, MessageChannelMain, safeStorage, Tray, Menu, nativeImage, nativeTheme, powerMonitor, protocol, net, type UtilityProcess } from 'electron';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { RENDERER_METHODS } from '../shared/rpc-methods';
 import path from 'node:path';
@@ -343,13 +343,19 @@ async function login(provider: string) {
     if(loginChildren.get(provider)!==child)return;
     loginChildren.delete(provider);
     const completed=loginSucceeded&&(provider==='codex'||code===0);
-    const accepted=providerLoginState.update(provider,token,{phase:completed?'completed':'failed',message:completed?'官方程序报告登录完成，正在检查连接。':'官方登录没有完成，可以重新登录。'});
+    // DSH stores its grant before the login process finishes its own profile read, so an
+    // unfinished DSH login is settled by the connection check rather than by the exit code.
+    const unfinished='官方登录没有完成，可以重新登录。',recheck=!completed&&provider==='dsh'&&ready;
+    const accepted=providerLoginState.update(provider,token,{phase:completed?'completed':'failed',message:completed?'官方程序报告登录完成，正在检查连接。':recheck?'登录程序没有报告完成，正在核对账号是否已经登录…':unfinished});
     if(ready)void request('internal.provider.loginEnd',{provider}).then(async()=>{
-      if(!accepted||!completed)return;
-      const infos=await request('provider.probe',{provider}) as ProviderInfo[];
+      if(!accepted||!completed&&!recheck)return;
+      // The first check after a fresh install starts the program cold: give it the probe budget.
+      const infos=await request('provider.probe',{provider},rpcTimeout('provider.probe')) as ProviderInfo[];
       const info=infos.find(item=>item.id===provider);
+      // The program can report an unfinished login after the account was already stored.
+      if(!completed){providerLoginState.settleUnfinished(provider,token,info?.available?{phase:'completed',message:'账号已经登录，连接检查通过。'}:{phase:'failed',message:unfinished});return;}
       providerLoginState.checked(provider,token,info?.available?'官方授权已完成，连接检查通过。':`官方授权已完成，连接检查未通过：${info?.detail||'请重新检测连接。'}`);
-    }).catch(()=>providerLoginState.checked(provider,token,'官方授权已完成，连接检查未完成，请重新检测连接。'));
+    }).catch(()=>{if(completed)providerLoginState.checked(provider,token,'官方授权已完成，连接检查还没有结果，请稍后重新检测连接。');else providerLoginState.settleUnfinished(provider,token,{phase:'failed',message:unfinished});});
   });
   }catch(error){providerLoginState.update(provider,token,{phase:'failed',message:`登录启动失败：${redact(error instanceof Error?error.message:String(error))}`});}
   finally{if(!loginChildren.has(provider)){loginStarting.delete(provider);if(loginHeld&&ready)void request('internal.provider.loginEnd',{provider}).catch(()=>{});}}
@@ -458,7 +464,15 @@ function registerIpc() {
       await request('internal.key', { value }); await Promise.all([request('provider.probe', { provider: 'deepseek' }), request('provider.probe', { provider: 'dsh' })]); return { saved: true };
     }
     if (method === 'project.openPath') {
-      const resolved = await request('project.openPath', params) as {root:string;relativePath:string;target:string;mode:'open'|'reveal'};
+      const resolved = await request('project.openPath', params) as {root:string;relativePath:string;target:string;mode:'open'|'reveal';source?:'submitted'};
+      if (resolved.source === 'submitted') {
+        // A round's submitted copy lives in AIROOM's own flow workspaces; it is only shown in Explorer.
+        const workspaces = realpathSync(path.join(dataDirectory, 'workspaces')), root = realpathSync(resolved.root);
+        if (path.dirname(root).toLowerCase() !== workspaces.toLowerCase() || !path.basename(root).startsWith('flow-')) throw new Error('无法核对成果副本位置。');
+        const target = resolveSafePath(root, resolved.relativePath);
+        if (target !== resolved.target || !statSync(target).isFile()) throw new Error('成果副本已改变，请重新读取成果。');
+        shell.showItemInFolder(target); return {revealed:true};
+      }
       const { project } = await request('internal.lookup', { projectId: params.projectId }) as Lookup;
       if (!project) throw new Error('项目不存在。');
       const target = resolveSafePath(project.directory, resolved.relativePath);

@@ -50,7 +50,7 @@ import {
   type RequestedRunConfig,
 } from "../shared/executor-config";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, realpathSync, unlinkSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -784,6 +784,7 @@ export class Engine {
         const data = this.projectFlow.snapshot(roomId.slice(8));
         return data.overview.stage?.leadMemberId ?? data.flow?.leadMemberId;
       },
+      projectFiles: () => this.projectRoomDirectory(roomId),
       interruptAndWait: () =>
         this.rooms.run(roomId, async () => {
           const running = this.roomRunning;
@@ -6458,6 +6459,17 @@ export class Engine {
       );
     }
   }
+  /** The project bound to a project meeting room, resolved for read-only access by room speech. */
+  private projectRoomDirectory(roomId: string | undefined) {
+    if (!roomId?.startsWith("project:")) return;
+    const project = this.store.get<Project>("projects", roomId.slice(8));
+    if (!project || project.kind) return;
+    try {
+      return realpathSync(project.directory);
+    } catch {
+      return;
+    }
+  }
   private context(run: Run, session: Session): AdapterContext {
     const project = this.require<Project>("projects", session.projectId);
     // Model and thinking level: the session's choice, else the member card's, else the executor default.
@@ -6493,6 +6505,7 @@ export class Engine {
       run,
       session,
       conversation: project.kind === 'lounge' ? 'room' : !session.purpose && !session.flowId && !run.flowOperationId && this.store.get('desk_session_links',session.id) ? 'desk' : undefined,
+      roomProjectDirectory: project.kind === "lounge" ? this.projectRoomDirectory(project.roomId) : undefined,
       settings: runSettings,
       persona: personaInstructions(
         member,

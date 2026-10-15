@@ -7,6 +7,7 @@ export function bindSourceEvidence(evidence:Evidence[],root:string|undefined):Ev
   return evidence.map(e=>{
     if(e.kind!=='source')return e;
     const base={...e,source:'reported' as const,sourceVerification:'unverified' as const,eventIds:[]};
+    if(!e.location?.trim()||!e.excerpt?.trim())return {...base,sourceNote:'成员未提供完整的来源位置或引用原文，原说明保留，该条来源尚未核实。'};
     if(/^https?:\/\//i.test(e.location??''))return {...base,sourceNote:'外部来源未在本机核实；请复核链接及引用，成员说明不等于原文。'};
     if(!root)return {...base,sourceNote:'来源文件不可读取，尚未核实。'};
     try{

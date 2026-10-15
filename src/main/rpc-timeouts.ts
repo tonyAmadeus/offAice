@@ -1,6 +1,8 @@
 const LONG_OPERATIONS=new Set(['room.compress','room.archive','executor.authenticate']);
 const WORKSPACE_OPERATIONS=new Set(['project.remove','session.delete','room.clear','room.uninherit','attachment.import','workspace.apply','workspace.discard','workspace.undo','workspace.undo.info']);
-const PROVIDER_OPERATIONS=new Set(['member.versions','provider.probe','provider.balance','provider.quota','member.use']);
+const PROVIDER_OPERATIONS=new Set(['member.versions','provider.balance','provider.quota']);
+// A connection check starts the member program several times; right after a download it starts cold.
+const CONNECTION_CHECKS=new Set(['provider.probe','member.use']);
 
 export function rpcTimeout(method:string){
   if(method.startsWith('backup.'))return 10*60_000;
@@ -10,6 +12,7 @@ export function rpcTimeout(method:string){
   if(method==='member.install')return 16*60_000;
   if(LONG_OPERATIONS.has(method))return 10*60_000;
   if(WORKSPACE_OPERATIONS.has(method))return 180_000;
+  if(CONNECTION_CHECKS.has(method))return 180_000;
   if(PROVIDER_OPERATIONS.has(method))return 90_000;
   return 45_000;
 }

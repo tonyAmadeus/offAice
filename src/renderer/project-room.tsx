@@ -1,5 +1,5 @@
 import { ActiveRunProgress } from './run-progress';
-import {readableContent} from '../shared/content-presentation';
+import {joinClauses,plainFlowError,readableContent} from '../shared/content-presentation';
 import {workspaceLocation} from './workspace-location';
 import { memberUserSummary, reportForDisplay } from '../shared/report-presentation';
 import { RoundResults } from './round-results';
@@ -15,8 +15,9 @@ import { FlowRunStop } from './flow-run-stop';
 import { LOG_READS, type LogTarget } from '../shared/work-log';
 import { RESULT_READS } from '../shared/round-results';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, FileDiff, FolderOpen, Hand, PanelRightClose, PanelRightOpen, LoaderCircle, Pause, Play, ScrollText, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
-import type { AllowedAction, Decision, FlowOperation, Integration, Plan, ProjectFlowSnapshot, Round, Task, TaskStatus } from '../shared/project-flow';
+import { createPortal } from 'react-dom';
+import { AlertTriangle, AppWindow, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, FileDiff, FolderOpen, Hand, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, LoaderCircle, Pause, Play, ScrollText, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import type { AllowedAction, Decision, FlowOperation, Integration, Plan, ProjectFlowSnapshot, Round, Task, TaskStatus, TaskSupplement } from '../shared/project-flow';
 import {FLOW_LIMITS,reviewLevel,roundLead,roundReviewLevel,REVIEW_LEVEL_LABELS,REVIEW_LEVEL_HINTS,QUOTA_STAGE_LABELS,type ReviewLevel,type DisputeRuling} from '../shared/project-flow';
 import type { Project, RoomId, RoomMessage, Snapshot } from '../shared/types';
 import {commandExitCodeNotes} from '../shared/project-flow-review';
@@ -28,6 +29,7 @@ import { RoomView } from './room';
 import { Markdown } from './Markdown';
 import { migrateProjectMembers, projectMembers, saveProjectMembers } from './project-members';
 import { dateTime, runnable, time, type Invoke } from './ui';
+import { planChanges } from '../shared/plan-changes';
 import { Modal } from './modals';
 import { MemberConfigFields, MemberRunConfig } from './member-config';
 import { ReportSwitcher, type ReportEntry } from './report-switcher';
@@ -75,7 +77,9 @@ export function ProjectRoom({ snapshot, project, invoke, onOpenSession,onRoundta
   const [busy, setBusy] = useState(false), [starting, setStarting] = useState(false), [picking, setPicking] = useState(false);
   const [newReviewLevel,setNewReviewLevel]=useState<ReviewLevel>('medium'), [dockOpen, setDockOpen] = useState(true);
   const nextStepBody=useRef<HTMLDivElement>(null);
-  function revealStep(target:string){setDockOpen(true);window.requestAnimationFrame(()=>{const node=nextStepBody.current?.querySelector<HTMLElement>(target);if(node){node.scrollIntoView({block:'nearest'});node.tabIndex=-1;node.focus({preventScroll:true});}});}
+  function revealStep(target:string){setDockOpen(true);window.requestAnimationFrame(()=>{const node=nextStepBody.current?.querySelector<HTMLElement>(target);if(node){node.scrollIntoView({block:'nearest'});node.tabIndex=-1;node.focus({preventScroll:true});
+    // The card may already be in view: a short highlight shows where the step is.
+    node.classList.remove('flow-step-flash');void node.offsetWidth;node.classList.add('flow-step-flash');window.setTimeout(()=>node.classList.remove('flow-step-flash'),1400);}});}
   const ready = (member: TeamMember) => runnable(snapshot.providers.find(info => info.id === member.executor));
   // Who takes part: chosen in 请大家一起来 (or the running flow's team); the chips above the composer change it.
   const [roster, setRoster] = useState<string[]>(() => projectMembers(project));
@@ -148,12 +152,12 @@ export function ProjectRoom({ snapshot, project, invoke, onOpenSession,onRoundta
       {live && flow!.status === 'planning' && !plan && (planOp || flow!.dispatchMode !== 'running'
         ? <div className="dock-row"><AlertTriangle size={15} /><p><strong>方案起草已停止。</strong>{planOp ? '在下面的提示里放弃这次起草，再点右上角“继续”，负责人会重新起草。' : '点右上角“继续”，负责人会接着起草。'}</p></div>
         : <div className="dock-row"><LoaderCircle size={15} className="spin" /><p><MemberName id={flow!.leadMemberId} /> 正在根据讨论起草方案…</p></div>)}
-      {live && plan && (plan.status === 'awaiting_confirmation') && <div data-flow-next="plan"><PlanCard plan={plan} lead={flow!.leadMemberId} rounds={rounds} busy={busy} defaultLevel={reviewLevel(flow!)} onRoundLevel={(round,level)=>mutate('projectFlow.review.configure',{flowId:flow!.id,expectedRevision:flow!.revision,roundId:round.id,reviewLevel:level},'本轮复核程度已调整。')} onConfirm={(choices,peerChoices,levels) => mutate('projectFlow.plan.confirm', { planId: plan.id, expectedRevision: plan.revision, requiresUserAcceptanceByRound: choices,requiresPeerReviewByRound:peerChoices,reviewLevelByRound:levels }, '方案已确认，开始派发任务。')} onRevise={instruction => mutate('projectFlow.plan.revise', { planId: plan.id, expectedRevision: plan.revision, instruction }, '已请负责人按你的意见改方案。')} /></div>}
+      {live && plan && (plan.status === 'awaiting_confirmation') && <div data-flow-next="plan"><PlanCard plan={plan} invoke={invoke} lead={flow!.leadMemberId} rounds={rounds} busy={busy} defaultLevel={reviewLevel(flow!)} onRoundLevel={(round,level)=>mutate('projectFlow.review.configure',{flowId:flow!.id,expectedRevision:flow!.revision,roundId:round.id,reviewLevel:level},'本轮复核程度已调整。')} onConfirm={(choices,peerChoices,levels) => mutate('projectFlow.plan.confirm', { planId: plan.id, expectedRevision: plan.revision, requiresUserAcceptanceByRound: choices,requiresPeerReviewByRound:peerChoices,reviewLevelByRound:levels }, '方案已确认，开始派发任务。')} onRevise={instruction => mutate('projectFlow.plan.revise', { planId: plan.id, expectedRevision: plan.revision, instruction }, '已请负责人按你的意见改方案。')} /></div>}
       {live && (blocked.length > 0 || flow!.blockedReasons.length > 0 || stuckTasks.length > 0) && <div data-flow-next="blocked" className="meeting-alert" role="alert"><AlertTriangle size={15} /><div><strong>流程暂停了，需要你先看一下</strong>
         {blocked.length ? blocked.map(op => { const task = data.tasks.find(item => item.id === op.targetId); return <div key={op.id} className="meeting-alert-item">
-          <p><strong>{OPERATION_KIND[op.kind] ?? op.kind}{task ? `：${task.title}` : ''}</strong>　{op.error}</p>
-          <GiveUp unknown={resultUnknown(op)} supplement={op.kind === 'supplement-delivery'} busy={busy} onContinue={op.kind!=='supplement-delivery'?evidence=>resolveAttempt(op,'continue',evidence):undefined} onConfirm={evidence => giveUp(op, evidence)} /></div>; })
-          : [...new Set([...flow!.blockedReasons, ...stuckTasks.map(task => task.blockedReason ?? `${task.title} 卡住了`)])].map(reason => <p key={reason}>{reason}</p>)}
+          <p><strong>{OPERATION_KIND[op.kind] ?? op.kind}{task ? `：${task.title}` : ''}</strong>　{plainFlowError(op.error)}</p>
+          <GiveUp task={op.kind === 'task'} unknown={resultUnknown(op)} supplement={op.kind === 'supplement-delivery'} busy={busy} onContinue={op.kind!=='supplement-delivery'?evidence=>resolveAttempt(op,'continue',evidence):undefined} onConfirm={evidence => giveUp(op, evidence)} /></div>; })
+          : [...new Set([...flow!.blockedReasons, ...stuckTasks.map(task => task.blockedReason ?? `${task.title} 卡住了`)])].map(reason => <p key={reason}>{plainFlowError(reason)}</p>)}
         <small>{blocked.length ? '结果未知的运行不会自动重发。处理完卡住的尝试后，点右上角的“继续”。' : '无法下结论请使用下方决策卡，任务成果保留；尚未开始就失败的任务可点“继续”重试。'}</small></div></div>}
       {live && (data.quotaWaits ?? []).map(wait => <div key={wait.id} className="dock-row"><LoaderCircle size={15} className="spin" /><p>等待 <MemberName id={wait.memberId} /> 额度恢复 · {QUOTA_STAGE_LABELS[wait.stage]} · 从 {time(wait.startedAt)} 开始；满 10 分钟会请你决定继续等还是换人。</p></div>)}
       {live && openDecisions.map(decision => <div key={decision.id} data-flow-next="decision"><DecisionCard decision={decision} tasks={data.tasks} rounds={data.rounds} busy={busy} onAnswer={params => mutate('projectFlow.decision.answer', { decisionId: decision.id, expectedRevision: decision.revision, ...params }, '已记录你的决定。')} /></div>)}
@@ -266,19 +270,28 @@ function FlowMessage({ title, status, pending, text, onOpen, children, headerAct
   </article>;
 }
 
-/** What waits for the owner, floating over the bottom of the chat: one line when folded, the cards when open. */
+/** What waits for the owner, floating over the bottom of the chat: one line when folded, the cards when open.
+ *  Open, it can also fill the whole chat area or move into its own window for long plans and reports. */
 function FlowDock({ open, onToggle, waiting, standing, action, children,bodyRef }: { open: boolean; onToggle: (open: boolean) => void; waiting: string[]; standing: string[]; action?: ReactNode; children: ReactNode;bodyRef?:Ref<HTMLDivElement> }) {
-  return <section className={`flow-dock ${open ? 'open' : ''} ${waiting.length ? 'has-waiting' : ''}`} aria-label="待你处理">
-    <div className="flow-dock-bar">
-      <button type="button" className="flow-dock-toggle" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}会议待办：${(waiting.length ? waiting : standing).join('、')}`} title={open ? '收起，回到聊天' : '展开待处理的事项'} onClick={() => onToggle(!open)}>
-        {open ? <ChevronDown size={15} /> : <ChevronUp size={15} />}<strong>{waiting.length ? '待你处理' : '进展'}</strong>{waiting.length > 0 && <span className="flow-dock-count">{waiting.length}</span>}
-        {/* Folded, the bar says what waits; open, the cards below say it, so the line is not repeated. */}
-        <span className="flow-dock-summary">{open ? '' : (waiting.length ? waiting : standing).join(' · ')}</span>
-      </button>
-      {action}
-    </div>
-    {open && <div className="flow-dock-body" ref={bodyRef}>{children}</div>}
-  </section>;
+  const [view, setView] = useState<'dock' | 'full' | 'window'>('dock');
+  const title = waiting.length ? '待你处理' : '进展';
+  const body = <div className="flow-dock-body" ref={bodyRef}>{children}</div>;
+  return <>
+    <section className={`flow-dock ${open ? 'open' : ''} ${open && view === 'full' ? 'full' : ''} ${waiting.length ? 'has-waiting' : ''}`} aria-label="待你处理">
+      <div className="flow-dock-bar">
+        <button type="button" className="flow-dock-toggle" aria-expanded={open} aria-label={`${open ? '收起' : '展开'}会议待办：${(waiting.length ? waiting : standing).join('、')}`} title={open ? '收起，回到聊天' : '展开待处理的事项'} onClick={() => { if (open) setView('dock'); onToggle(!open); }}>
+          {open ? <ChevronDown size={15} /> : <ChevronUp size={15} />}<strong>{title}</strong>{waiting.length > 0 && <span className="flow-dock-count">{waiting.length}</span>}
+          {/* Folded, the bar says what waits; open, the cards below say it, so the line is not repeated. */}
+          <span className="flow-dock-summary">{open ? '' : (waiting.length ? waiting : standing).join(' · ')}</span>
+        </button>
+        {action}
+        {view !== 'window' && <button type="button" className="icon-button" aria-label={view === 'full' && open ? '还原到聊天框上方' : '铺满聊天区查看'} title={view === 'full' && open ? '还原到聊天框上方' : '铺满聊天区查看'} onClick={() => { setView(view === 'full' && open ? 'dock' : 'full'); onToggle(true); }}>{view === 'full' && open ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>}
+        <button type="button" className="icon-button" aria-label={view === 'window' ? '收回到聊天框上方' : '在独立窗口查看'} title={view === 'window' ? '收回到聊天框上方' : '在独立窗口查看'} onClick={() => { setView(view === 'window' ? 'dock' : 'window'); onToggle(true); }}><AppWindow size={14} /></button>
+      </div>
+      {open && view !== 'window' && body}
+    </section>
+    {open && view === 'window' && createPortal(<Modal title={title} subtitle="在这里处理与在聊天框上方处理相同；关闭后回到原位置。" className="flow-dock-modal" onClose={() => setView('dock')}>{body}</Modal>, document.body)}
+  </>;
 }
 
 function MemberName({ id }: { id: string }) {
@@ -307,7 +320,19 @@ function LeadPicker({ team, ready, busy, onStart, onCancel }: { team: TeamMember
   </section>;
 }
 
-function PlanCard({ plan, lead, rounds, busy, onConfirm, onRevise,defaultLevel,onRoundLevel }: { plan: Plan; lead: string; rounds: Round[]; busy: boolean;defaultLevel:ReviewLevel;onRoundLevel:(round:Round,level:ReviewLevel)=>Promise<boolean>; onConfirm: (choices: Record<string, boolean>,peerChoices:Record<string,boolean>,levels:Record<string,ReviewLevel>) => Promise<boolean>; onRevise: (instruction: string) => Promise<boolean> }) {
+/** A revised plan names what changed against the version it replaces, so the owner can check the request landed. */
+function PlanChanges({ plan, invoke }: { plan: Plan; invoke: Invoke }) {
+  const team = useTeam(), [changes, setChanges] = useState<{ version: number; items: string[] } | null>(null);
+  useEffect(() => {
+    let alive = true; setChanges(null);
+    if (plan.parentPlanId) void invoke<Plan>('projectFlow.detail', { projectId: plan.projectId, kind: 'plan', id: plan.parentPlanId }, undefined, { background: true })
+      .then(parent => { if (alive) setChanges({ version: parent.version, items: planChanges(parent, plan, id => team.get(id)?.name ?? id) }); }).catch(() => {});
+    return () => { alive = false; };
+  }, [plan.id, plan.parentPlanId]);
+  if (!changes) return null;
+  return <div className="plan-changes" aria-label={`和第 ${changes.version} 版相比`}><h4>和第 {changes.version} 版相比</h4>{changes.items.length ? <ul>{changes.items.map(item => <li key={item}>{item}</li>)}</ul> : <p>内容没有变化。</p>}</div>;
+}
+function PlanCard({ plan, invoke, lead, rounds, busy, onConfirm, onRevise,defaultLevel,onRoundLevel }: { plan: Plan; invoke: Invoke; lead: string; rounds: Round[]; busy: boolean;defaultLevel:ReviewLevel;onRoundLevel:(round:Round,level:ReviewLevel)=>Promise<boolean>; onConfirm: (choices: Record<string, boolean>,peerChoices:Record<string,boolean>,levels:Record<string,ReviewLevel>) => Promise<boolean>; onRevise: (instruction: string) => Promise<boolean> }) {
   const toRoundtable=useRoundtableNavigation();
   const [revision, setRevision] = useState<string | null>(null);
   const waiting = plan.status === 'awaiting_confirmation';
@@ -323,6 +348,7 @@ function PlanCard({ plan, lead, rounds, busy, onConfirm, onRevise,defaultLevel,o
       <button type="button" className="plan-card-title" aria-expanded={open} onClick={() => setOpen(value => !value)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<strong>{plan.objective}</strong></button>{toRoundtable&&<button className="link-button" onClick={()=>toRoundtable({projectId:plan.projectId,planId:plan.id})}>送去圆桌评审方案</button>}
       {open && <>
         <p className="plan-scope">{plan.scope}</p>
+        {plan.parentPlanId && <PlanChanges plan={plan} invoke={invoke} />}
         <div className="plan-columns"><div><h4>交付什么</h4><ul>{plan.deliverables.map(item => <li key={criterionText(item)}>{criterionText(item)}（{criterionKind(item)==='owner'?'你来定':criterionKind(item)==='judge'?'成员评价':'可核对'}）</li>)}</ul></div><div><h4>怎样算完成</h4><ul>{plan.acceptanceCriteria.map(item => <li key={criterionText(item)}>{criterionText(item)}（{criterionKind(item)==='owner'?'你来定':criterionKind(item)==='judge'?'成员评价':'可核对'}）</li>)}</ul></div></div>
         <ol className="plan-rounds">{plan.rounds.map((round, index) => {
           const isLast = round.key === last, live = state(round.key),selectedLevel=waiting?levels[round.key]??round.reviewLevel??'inherit':live?.reviewLevel??'inherit',effective=selectedLevel==='inherit'?defaultLevel:selectedLevel,isLow=effective==='low';
@@ -330,7 +356,7 @@ function PlanCard({ plan, lead, rounds, busy, onConfirm, onRevise,defaultLevel,o
             {waiting ? <label className="plan-accept" title={isLast ? '最后一轮一定由你验收' : '不勾选：负责人自验后继续，不写回项目；下一次你验收时一起写回'}><input type="checkbox" checked={isLast || isLow || choices[round.key] !== false} disabled={isLast || isLow || busy} onChange={event => setChoices(previous => ({ ...previous, [round.key]: event.target.checked }))} />需要我验收</label>
               : <small className="plan-accept-note">{live?.requiresUserAcceptance??round.requiresUserAcceptance ? '你来验收' : '负责人自验'}</small>}</div>
             <p>{round.goal}</p><label className="plan-review-level">本轮复核程度<select aria-label={`第 ${index+1} 轮复核程度`} value={selectedLevel} disabled={busy||!waiting&&(!live||live.status!=='pending'||Boolean(live.startedAt))} onChange={e=>{const level=e.target.value as ReviewLevel|'inherit';if(waiting)setLevels({...levels,[round.key]:level});else if(level!=='inherit'&&live)void onRoundLevel(live,level);}}><option value="inherit" disabled={!waiting}>沿用总设置</option>{(['high','medium','low'] as const).map(level=><option key={level} value={level}>{REVIEW_LEVEL_LABELS[level]}</option>)}</select></label>{isLow&&<small>本轮不自动检查，必须由你验收。</small>}{round.completionCriteria&&<ul>{round.completionCriteria.map(c=><li key={criterionText(c)}>轮次标准：{criterionText(c)}（{criterionKind(c)==='owner'?'你来定':criterionKind(c)==='judge'?'成员评价':'可核对'}）</li>)}</ul>}{waiting?<label className="plan-peer"><input type="checkbox" aria-label={`第 ${index+1} 轮整体结果也请他人复核`} checked={peerChoices[round.key]===true} disabled={busy} onChange={event=>setPeerChoices(previous=>({...previous,[round.key]:event.target.checked}))}/>本轮整体结果也请他人复核</label>:live?.requiresPeerReview&&<small>整轮另请其他成员复核</small>}
-            <ul className="plan-tasks">{plan.tasks.filter(task => task.roundKey === round.key).map(task => <li key={task.key}><MemberName id={task.memberId} /><span>{task.title}</span>{task.reuse&&<small>拟沿用 {task.reuse}（后台核对后生效）</small>}{task.review&&<small>单独复核</small>}{task.dependencies.length > 0 && <small>等 {task.dependencies.map(key => plan.tasks.find(item => item.key === key)?.title ?? key).join('、')}</small>}</li>)}</ul></li>;
+            <ul className="plan-tasks">{plan.tasks.filter(task => task.roundKey === round.key).map(task => <li key={task.key}><MemberName id={task.memberId} /><span>{task.title}</span>{task.reuse&&<small>拟沿用 {task.reuse}（后台核对后生效）</small>}{task.review&&<small>单独复核</small>}{task.dependencies.length > 0 && <small>等 {task.dependencies.map(key => plan.tasks.find(item => item.key === key)?.title ?? key).join('、')}</small>}{task.allowedPaths.length > 0 && <small className="plan-task-paths" title="这项任务只能修改这些文件或文件夹">可改：{task.allowedPaths.join('、')}</small>}{task.completionCriteria.length > 0 && <details className="plan-task-criteria"><summary>完成标准 {task.completionCriteria.length} 条</summary><ul>{task.completionCriteria.map(item => <li key={criterionText(item)}>{criterionText(item)}</li>)}</ul></details>}</li>)}</ul></li>;
         })}</ol>
         {(waiting || plan.status === 'confirmed') && <div className="round-actions plan-confirm">
           {waiting && <button type="button" className="button primary" disabled={busy || !allowed(plan.allowedActions, 'projectFlow.plan.confirm')} title={action(plan.allowedActions, 'projectFlow.plan.confirm')?.reason} onClick={() => void onConfirm(Object.fromEntries(plan.rounds.map(round => [round.key, round.key === last || (levels[round.key]??round.reviewLevel??defaultLevel)==='low' || choices[round.key] !== false])),peerChoices,Object.fromEntries(Object.entries(levels).filter((entry):entry is [string,ReviewLevel]=>entry[1]!=='inherit')))}><CheckCircle2 size={14} />确认方案，开工</button>}
@@ -357,6 +383,7 @@ function RoundCard({ round, lead, data, invoke, busy, onDecide, onRecover,onChec
     <article className={`meeting-card round-card status-${round.status} ${awaiting ? 'awaiting' : ''}`} aria-label={`第 ${round.index + 1} 轮成品`}>
       <small className="round-review-level">本轮实际复核：{REVIEW_LEVEL_LABELS[integration?.reviewLevel??round.effectiveReviewLevel??roundReviewLevel(data.flow!,round)]}</small><strong className="round-card-title">{round.title}{acceptance?.acceptedAt && <small>{dateTime(acceptance.acceptedAt)} {acceptance.requiresApply && acceptance.status==='accepted' ? '已完成验收' : '负责人自验通过，尚未写回'}</small>}</strong>
       {report ? <div className="round-report"><h4>这一轮完成了</h4><div className="round-report-summary"><Markdown text={readableContent(report.summary)}/></div>
+        {report.replyNotes?.map(note=><p className="task-meta" key={note}>{note}</p>)}
         {report.deliverables.length > 0 && <p className="round-deliverables">{report.deliverables.map(item => <span key={item} className="round-file">{item}</span>)}</p>}
         {report.userDecisionNeeded && <p className="round-report-ask"><Hand size={13} />{report.userDecisionNeeded}</p>}
         {report.remainingIssues.length > 0 && <><h4>还要注意</h4><ul>{report.remainingIssues.map(item => <li key={item}>{item}</li>)}</ul></>}
@@ -401,7 +428,7 @@ function DecisionCard({ decision, tasks, rounds,busy, onAnswer }: { decision: De
   return <section className="meeting-card decision-card" aria-label={`决策：${decision.title}`}>
     <div className="decision-card-head"><Hand size={15} /><strong>{decision.title}</strong></div>
     <p>{decision.reason}</p>
-    {decision.kind==='next-round'&&<div className="next-round-adjustments"><small>沿用现有负责人和分工。较大的方向或范围变化，请选“要求修改方案”。</small>{recommendation?.taskAdjustments.map(a=><div key={a.taskId}><strong>{tasks.find(t=>t.id===a.taskId)?.title}</strong>{a.goal&&<p>目标：{a.goal}</p>}{a.inputs?.length&&<p>补充输入：{a.inputs.join('；')}</p>}{a.completionCriteria&&<ul>{a.completionCriteria.map(c=><li key={criterionText(c)}>核对标准：{criterionText(c)}</li>)}</ul>}</div>)}{recommendation?.completionCriteria&&<ul>{recommendation.completionCriteria.map(c=><li key={criterionText(c)}>整轮标准：{criterionText(c)}</li>)}</ul>}</div>}
+    {decision.kind==='next-round'&&<div className="next-round-adjustments"><small>沿用现有负责人和分工。较大的方向或范围变化，请选“要求修改方案”。</small>{recommendation?.taskAdjustments.map(a=><div key={a.taskId}><strong>{tasks.find(t=>t.id===a.taskId)?.title}</strong>{a.goal&&<p>目标：{a.goal}</p>}{a.inputs?.length&&<p>补充输入：{joinClauses(a.inputs,'；')}</p>}{a.completionCriteria&&<ul>{a.completionCriteria.map(c=><li key={criterionText(c)}>核对标准：{criterionText(c)}</li>)}</ul>}</div>)}{recommendation?.completionCriteria&&<ul>{recommendation.completionCriteria.map(c=><li key={criterionText(c)}>整轮标准：{criterionText(c)}</li>)}</ul>}</div>}
     {decision.kind==='review-dispute'&&<div className="review-disputes"><small>每项任务最多返还 {FLOW_LIMITS.disputeReturnWaivers} 次退回次数；超过后仍可裁定，退回正常计数。你可统一裁定，也可逐条选择。</small>{disputes.map(({finding,reason})=><div key={finding.id}><strong>{finding.location} · {finding.request}</strong><p>复核依据：{finding.evidence}</p><p>作者异议：{reason}</p><label>逐条裁定<select aria-label={`裁定「${finding.request}」`} value={rulings[finding.id]??''} disabled={busy} onChange={e=>setRulings({...rulings,[finding.id]:e.target.value as DisputeRuling['verdict']})}><option value="">请选择…</option><option value="uphold-author">支持作者</option><option value="uphold-review">维持复核</option></select></label></div>)}</div>}
     {decision.kind==='replan'&&<small>{decision.stage==='integration-fix'?'仅替换本轮负责人，重做卡住的整合事项；后续轮次仍由原负责人负责。':'仅重做这项任务，保留其他成员已通过的成果。'}人工指定后只重做一次，历史修正次数不清零。</small>}
     {decision.options.some(requiresMember)&&<label>选择接手成员<select aria-label={`为「${decision.title}」选择成员`} value={memberId} disabled={busy} onChange={event=>setMemberId(event.target.value)}><option value="">请选择…</option>{(decision.eligibleMemberIds??[]).map(id=><option key={id} value={id}>{team.get(id)?.name??id}</option>)}</select></label>}
@@ -448,7 +475,7 @@ function TaskTile({ task, data, onOpen }: { task: Task; data: ProjectFlowSnapsho
   const review = data.reviews.filter(item => item.taskId === task.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   const needsReview=task.reviewRequested===true||task.kind!=='integration-fix'&&(task.effectiveReviewLevel??reviewLevel(data.flow!))==='high';
   const waitingRound=!needsReview&&['review_skipped','integrated'].includes(task.status)&&!['accepted','awaiting_acceptance'].includes(data.rounds.find(round=>round.id===task.roundId)?.status??'');
-  const line = task.blockedReason ?? (waitingRound?'等本轮整体检查':['running', 'queued', 'correcting'].includes(task.status) && task.lastActivity ? task.lastActivity.text : review?.status === 'changes_requested' ? '复核要求修改' : TASK_STATUS[task.status]);
+  const line = task.blockedReason ? plainFlowError(task.blockedReason) : (waitingRound?'等本轮整体检查':['running', 'queued', 'correcting'].includes(task.status) && task.lastActivity ? task.lastActivity.text : review?.status === 'changes_requested' ? '复核要求修改' : TASK_STATUS[task.status]);
   return <button type="button" className={`task-tile member-${task.memberId} status-${task.status}`} aria-label={`任务：${task.title}`} onClick={onOpen}>
     <span className="task-tile-top">{member && <Avatar member={member} size={22} ring={false} mood={task.status === 'running' ? 'working' : undefined} />}<strong>{task.title}</strong></span>
     <small>{['running', 'correcting'].includes(task.status) && <span className="pulse" />}{line}</small>
@@ -478,12 +505,13 @@ function TaskDetail({ invoke, task, tasks, data, snapshot, members, busy, blocke
     <p>{task.goal}</p>
     <div className="task-workspace-location"><p title={location.path}>工作位置 · {location.label}</p><small>{location.hint}</small>{taskSession?.workspace&&!taskSession.restoredHistoryOnly&&<button type="button" className="link-button" onClick={()=>void invoke('workspace.open',{sessionId:taskSession.id}).catch(()=>{})}>打开任务工作位置</button>}</div>
     {submission&&toRoundtable&&<button className="link-button" onClick={()=>toRoundtable({projectId:task.projectId,submissionId:submission.id,version:submission.version})}>送去圆桌评审提交</button>}
-    {submission&&<><h4>做了什么</h4><p>{memberUserSummary(submission)}</p></>}
+    {submission&&<><h4>做了什么</h4><p>{memberUserSummary(submission)}</p>{submission.replyNotes?.map(note=><p className="task-meta" key={note}>{note}</p>)}</>}
     {task.completionCriteria.length > 0 && <><h4>完成标准</h4><ul>{task.completionCriteria.map(item => <li key={criterionText(item)}>{criterionText(item)}（{criterionKind(item)==='owner'?'你来定':criterionKind(item)==='judge'?'成员评价':'可核对'}）</li>)}</ul></>}
     {task.allowedPaths.length > 0 && <p className="task-meta">可以修改：{task.allowedPaths.join('、')}</p>}
     {waitingOn.length > 0 && task.status === 'pending' && <p className="task-meta">等 {waitingOn.map(item => item.title).join('、')} 先完成</p>}
-    {task.lastActivity && <p className="task-meta">最近：{task.lastActivity.text} · {time(task.lastActivity.at)}</p>}
-    {task.blockedReason && <p className="task-meta bad">{task.blockedReason}</p>}
+    {task.lastActivity && !task.blockedReason && task.status !== 'blocked' && <p className="task-meta">最近：{task.lastActivity.text} · {time(task.lastActivity.at)}</p>}
+    {task.blockedReason && <p className="task-meta bad">{plainFlowError(task.blockedReason)}</p>}
+    <SupplementReceipts task={task} />
     {submission && <p className="task-meta">第 {submission.sequence} 次提交：改了 {submission.changedFileCount ?? submission.changes.length} 个文件，{submission.evidenceCount ?? submission.evidence.length} 条验证依据{(submission.outOfScopeCount ?? submission.outOfScopeChanges.length) > 0 && <strong className="bad"> · {submission.outOfScopeCount ?? submission.outOfScopeChanges.length} 个文件超出范围</strong>}</p>}
     {review && <p className={`task-meta review-${review.status}`}>复核：{review.status === 'passed' ? '通过' : review.status === 'changes_requested' ? '要求修改' : review.status === 'running' || review.status === 'queued' ? '进行中' : review.status === 'stale' ? '已过期' : review.status === 'inconclusive' ? '无法下结论' : '受阻'} · 退回 {task.returnCount}/2</p>}
     {Boolean(task.disputeReturnWaiverCount)&&<p className="task-meta">异议返还已用 {task.disputeReturnWaiverCount}/{FLOW_LIMITS.disputeReturnWaivers} 次；换人或继续任务会保留此次数。</p>}
@@ -492,7 +520,7 @@ function TaskDetail({ invoke, task, tasks, data, snapshot, members, busy, blocke
     {task.reusedFromTaskId&&<p className="task-meta">已核对并沿用旧任务成果，没有重新执行。</p>}{task.reviewerChanges?.map((change,index)=><p className="task-meta" key={index}>复核人 <MemberName id={change.previousMemberId}/> → <MemberName id={change.memberId}/>：{change.reason}</p>)}{task.manualRedos?.length&&<p className="task-meta">人工指定重做 {task.manualRedos.length} 次，每次仅一次工作机会，历史退回次数保留。</p>}
     {review?.criteriaResults&&<><h4>复核标准核对</h4><ul>{review.criteriaResults.map((result,index)=><li key={index}>{result.verified?'已核实':'未核实'} · {result.criterion}{result.evidence&&<small> · {result.evidence}</small>}</li>)}</ul></>}
     <ReviewDetails projectId={task.projectId} invoke={invoke} artifactId={submission?.version?.artifactId} assessments={review?.assessments} strengths={review?.strengths} sources={review?.evidence??submission?.evidence} owner={memberCriteria(task.completionCriteria).deferred}/>
-    {review?.deferredUserCriteria?.length&&<p className="task-meta">留待整轮用户验收：{review.deferredUserCriteria.join('、')}</p>}
+    {review?.deferredUserCriteria?.length&&<p className="task-meta">留待整轮用户验收：{joinClauses(review.deferredUserCriteria,'、')}</p>}
     {review?.findings.length ? <ul className="task-findings">{review.findings.map(finding => <li key={finding.id} className={`finding-${finding.severity}`}><strong>{finding.severity === 'blocking' ? '必须改' : finding.severity === 'should-fix' ? '建议改' : '可选'}</strong> {finding.location}：{finding.request}<small>{finding.kind === 'verified' ? '已核实' : finding.kind === 'suspected' ? '待验证' : '建议'} · {finding.evidence}</small></li>)}</ul> : null}
     <div className="round-actions">
       <button type="button" className="button small secondary" onClick={() => onLog({kind:'task',id:task.id})}>看工作日志</button>
@@ -500,16 +528,22 @@ function TaskDetail({ invoke, task, tasks, data, snapshot, members, busy, blocke
       {canMove && <select aria-label={`把「${task.title}」交给`} disabled={busy} value="" onChange={event => { if (event.target.value) void onReassign(task, event.target.value); }}><option value="">换人…</option>{members.filter(item => item.id !== task.memberId).map(item => <option key={item.id} value={item.id}>交给 {item.name}</option>)}</select>}
 
     </div>
-    {stuck && <div className="task-stuck"><p className="task-meta bad">卡在{OPERATION_KIND[stuck.kind] ?? stuck.kind}：{stuck.error}</p><GiveUp key={stuck.id} unknown={resultUnknown(stuck)} supplement={stuck.kind === 'supplement-delivery'} busy={busy} onContinue={stuck.kind!=='supplement-delivery'?evidence=>onContinue(stuck,evidence):undefined} onConfirm={evidence => onGiveUp(stuck, evidence)} /></div>}
+    {stuck && <div className="task-stuck"><p className="task-meta bad">卡在{OPERATION_KIND[stuck.kind] ?? stuck.kind}：{plainFlowError(stuck.error)}</p><GiveUp key={stuck.id} task={stuck.kind === 'task'} unknown={resultUnknown(stuck)} supplement={stuck.kind === 'supplement-delivery'} busy={busy} onContinue={stuck.kind!=='supplement-delivery'?evidence=>onContinue(stuck,evidence):undefined} onConfirm={evidence => onGiveUp(stuck, evidence)} /></div>}
   </article>;
 }
 
+const SUPPLEMENT_STATUS: Record<TaskSupplement['status'], string> = { pending: '等待送达', delivering: '正在送达', delivered: '已送达，成员正在处理', submitted: '已随提交交回', applied: '已纳入', unknown: '是否送达待核对', awaiting_scope: '超出范围，等你决定', dismissed: '已撤回', replanned: '已转入新方案' };
+/** Each extra requirement shows where it stands: sent, taken into the work, or waiting on the owner. */
+export function SupplementReceipts({ task }: { task: Task }) {
+  if (!task.supplements?.length) return null;
+  return <div className="supplement-receipts" aria-label={`「${task.title}」的补充要求`}><strong>补充要求 · {task.title}</strong><ul>{task.supplements.map(item => <li key={item.id}><span>{item.text}</span><small className={`supplement-${item.status}`}>{SUPPLEMENT_STATUS[item.status] ?? item.status} · {time(item.createdAt)}</small></li>)}</ul></div>;
+}
 /** Giving up a blocked attempt, with its reason asked inline (the desktop window has no prompt()). */
-export function GiveUp({ unknown, supplement = false, busy, onConfirm,onContinue }: { unknown: boolean; supplement?: boolean; busy: boolean; onConfirm: (evidence: string) => Promise<boolean>;onContinue?:(evidence:string)=>Promise<boolean> }) {
+export function GiveUp({ unknown, supplement = false, task = false, busy, onConfirm,onContinue }: { unknown: boolean; supplement?: boolean; task?: boolean; busy: boolean; onConfirm: (evidence: string) => Promise<boolean>;onContinue?:(evidence:string)=>Promise<boolean> }) {
   const [reason, setReason] = useState<string | null>(null),[continuing,setContinuing]=useState(false);
   if (reason === null) return <div className="round-actions">{onContinue&&<button type="button" className="button small secondary" disabled={busy} onClick={()=>{setContinuing(true);setReason('');}}>接着做</button>}<button type="button" className="button small danger-outline" disabled={busy} onClick={() => {setContinuing(false);setReason('');}}>{unknown ? '放弃旧尝试' : '放弃这次尝试，重新安排'}</button></div>;
   return <div className="task-giveup" role="group" aria-label="放弃这次尝试">
-    <p>{continuing?'先查看原工作记录，确认旧运行已经结束，可选填核对情况。接着做会沿用原会话，作者保留原副本；复核会重新核对同一成果版本。':supplement ? '本次补充是否送达尚未核对。查看工作记录后，可以直接放弃旧尝试；补充要求会保留，点“继续”后重新执行。' : unknown ? '这一次的结果未知。看过工作记录后，可以直接放弃这次旧尝试；核对情况可选填。' : '放弃这次没通过检查的尝试，原因会记录下来。流程运行中会继续安排；暂停时需点“继续”。'}</p>
+    <p>{continuing?'先查看原工作记录，确认旧运行已经结束，可选填核对情况。接着做会沿用原会话，作者保留原副本；复核会重新核对同一成果版本。':supplement ? '本次补充是否送达尚未核对。查看工作记录后，可以直接放弃旧尝试；补充要求会保留，点“继续”后重新执行。' : unknown ? '这一次的结果未知。看过工作记录后，可以直接放弃这次旧尝试；核对情况可选填。' : task ? '放弃后由同一位成员开新会话，从本轮起点重新做这项任务；上次副本里的改动不保留，原因会记录下来。要换人，请在任务卡上选“换人…”。流程运行中会立即重新开始；暂停时需点“继续”。' : '放弃这次没通过检查的尝试，原因会记录下来，再按同一成果版本重新安排。流程运行中会继续安排；暂停时需点“继续”。'}</p>
     <textarea rows={2} aria-label="放弃的原因" placeholder="补充原因（可选）" value={reason} onChange={event => setReason(event.target.value)} />
     <div className="round-actions"><button type="button" className="button small primary" disabled={busy} onClick={() => void (continuing?onContinue!:onConfirm)(reason.trim()).then(ok => { if (ok) setReason(null); })}>{continuing?'确定接着做':'确定放弃'}</button><button type="button" className="button small quiet" disabled={busy} onClick={() => setReason(null)}>取消</button></div>
   </div>;

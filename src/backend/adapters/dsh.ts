@@ -16,6 +16,7 @@ import { redact } from '../security';
 import { prepareCliLaunch } from './common';
 import { NativeResponseError, failureKind } from '../adapter-failure';
 import { runtimeFingerprint } from '../runtime-pool';
+import { roomProjectFiles } from './chat-policy';
 import { latestPersona } from '../native-context';
 import { acpPrompt } from './images';
 import { acpConfigReport, configureAcp, selectConfig, configChoices, configCurrent } from './acp-config';
@@ -99,11 +100,24 @@ function dshPathDenialImplementation(name: string, input: Record<string, unknown
   } catch { return '无法安全核对文件路径或文件链接，已拒绝。'; }
 }
 
+/** Self-contained: a read tool may name an absolute path inside a project meeting room's read-only root. */
+function dshReadRootImplementation(name: string, input: Record<string, unknown>, roots: unknown, check: typeof dshPathDenialImplementation, p: typeof path, fs: {lstatSync: typeof lstatSync; realpathSync: typeof realpathSync}): boolean {
+  if (!['read', 'read_image', 'glob', 'grep'].includes(name) || !Array.isArray(roots) || !input || typeof input !== 'object' || Array.isArray(input)) return false;
+  // Relative paths resolve against the session directory, so they never count as inside another root.
+  const requested = name === 'glob' || name === 'grep' ? input.path : input.file_path;
+  if (typeof requested !== 'string' || !p.isAbsolute(requested)) return false;
+  return roots.some(root => typeof root === 'string' && p.isAbsolute(root) && !check(name, input, root, p, fs));
+}
+export function dshReadRootAllowed(name: string | undefined, args: unknown, roots: string[]) {
+  return Boolean(name && args && typeof args === 'object' && !Array.isArray(args) && dshReadRootImplementation(name, args as Record<string, unknown>, roots, dshPathDenialImplementation, path, {lstatSync, realpathSync}));
+}
+
 /** Kept in AIROOM's own native home, mounted using the documented Cordis plugin surface. */
 export const DSH_GUARD_SOURCE = [
   "import path from 'node:path';",
   "import * as fs from 'node:fs';",
   'const checkPath = (' + dshPathDenialImplementation.toString() + ');',
+  'const readRoot = (' + dshReadRootImplementation.toString() + ');',
   'const toolDenied = (' + dshToolDeniedImplementation.toString() + ');',
   'const terminalEvent = (' + dshTerminalEvent.toString() + ');',
   "export const name = 'airoom-dsh-policy';",
@@ -120,7 +134,7 @@ export const DSH_GUARD_SOURCE = [
   "    if (requested && requested !== config.sandboxMode) return 'AIROOM: widening the session sandbox is disabled';",
   "    if (config.fileScope === 'any') return; // anything else, including a missing value, keeps the workspace boundary",
   "    const denied = checkPath(exec.name, exec.arguments, config.workspaceRoot, path, fs);",
-  "    if (denied) return denied;",
+  "    if (denied && !readRoot(exec.name, exec.arguments, config.readRoots, checkPath, path, fs)) return denied;",
   "    if (['read','read_image','glob','grep','write','edit'].includes(exec.name)) {",
   "      try {",
   "        const actual = exec.agent?.session?.header?.cwd;",
@@ -155,7 +169,7 @@ export function buildDshEnvironment(base: NodeJS.ProcessEnv, home: string, write
   return env;
 }
 
-export function buildDshPatch(settings: Settings, cwd: string, writeMode: boolean, guardFile: string, persona?: string) {
+export function buildDshPatch(settings: Settings, cwd: string, writeMode: boolean, guardFile: string, persona?: string, readRoots: string[] = []) {
   const base = new URL(settings.deepseekBaseUrl);
   if (base.origin !== 'https://api.deepseek.com' || !['/','/anthropic','/anthropic/'].includes(base.pathname) || base.username || base.password || base.search || base.hash) throw new Error('第一版 DSH 仅允许 DeepSeek 官方 HTTPS 服务地址，避免把密钥发送到未确认的主机。');
   const endpoint = base.toString().replace(/\/$/, '') + (/\/anthropic\/?$/.test(base.pathname) ? '' : '/anthropic');
@@ -180,17 +194,18 @@ export function buildDshPatch(settings: Settings, cwd: string, writeMode: boolea
     {id:'deepseek-account',config:{platformOrigin:'https://platform.deepseek.com',inferenceOrigin:'https://api.deepseek.com',desktopPlatform:null}},
     {id:'llm-deepseek-account', disabled:false, config:{baseURL:endpoint}},
     {id:'acp', config:{provider:'deepseek-account', model:dshModelSelection(settings.models.dsh).model}},
-    {insert:[{id:'airoom-policy', name:pathToFileURL(guardFile).href, config:{...policy, workspaceRoot:cwd}}]},
+    {insert:[{id:'airoom-policy', name:pathToFileURL(guardFile).href, config:{...policy, workspaceRoot:cwd, readRoots}}]},
   ];
 }
 
-export function dshPermissionDenial(name: string | undefined, args: unknown, policy: DshSessionPolicy, cwd: string): string | undefined {
+export function dshPermissionDenial(name: string | undefined, args: unknown, policy: DshSessionPolicy, cwd: string, readRoots: string[] = []): string | undefined {
   if (!name || !args || typeof args !== 'object' || Array.isArray(args)) return '审批缺少可核对的工具名称或参数。';
   if (dshToolDeniedImplementation(name, policy)) return '此会话禁止该工具；不能通过审批扩大权限。';
   const input = args as Record<string,unknown>;
   if (input.sandbox_permissions && input.sandbox_permissions !== policy.sandboxMode) return '禁止扩大当前会话的沙箱范围。';
   if (policy.fileScope === 'any') return;
-  return dshPathDenialImplementation(name, input, cwd, path, {lstatSync, realpathSync});
+  const denied = dshPathDenialImplementation(name, input, cwd, path, {lstatSync, realpathSync});
+  return denied && !dshReadRootAllowed(name, input, readRoots) ? denied : undefined;
 }
 
 /** Flatten ACP select options (plain or grouped) for one config id. */
@@ -324,7 +339,8 @@ export class DshAdapter implements Adapter {
     return name;
   }
 
-  private async collect(file:string, args:string[], env:NodeJS.ProcessEnv, cwd:string, timeout=15000) {
+  // The first start after a download compiles DSH's modules with no cache yet.
+  private async collect(file:string, args:string[], env:NodeJS.ProcessEnv, cwd:string, timeout=30000) {
     const runner = this.runner(file, env);
     const child = spawnOwned(runner.file, [...runner.args,...args], {cwd,env:runner.env});
     return await new Promise<string>((resolve,reject) => {
@@ -343,7 +359,7 @@ export class DshAdapter implements Adapter {
     });
   }
 
-  private async prepare(file:string, settings:Settings, env:NodeJS.ProcessEnv, cwd:string, writeMode:boolean, persona?:string) {
+  private async prepare(file:string, settings:Settings, env:NodeJS.ProcessEnv, cwd:string, writeMode:boolean, persona?:string, readRoots:string[]=[]) {
     const home = this.home(env); const name = this.profile(settings);
     await mkdir(home, {recursive:true});
     const isolated = buildDshEnvironment(env,home,writeMode,env.DEEPSEEK_API_KEY,dshSessionPolicy(settings.permissions.dsh,writeMode).sandboxMode);
@@ -371,7 +387,7 @@ export class DshAdapter implements Adapter {
     }
     const patches = path.join(home,'launch-patches'); await mkdir(patches,{recursive:true});
     const patchFile = path.join(patches,randomUUID()+'.json');
-    await writeFile(patchFile,JSON.stringify(buildDshPatch(settings,cwd,writeMode,guard,persona),null,2),{encoding:'utf8',mode:0o600});
+    await writeFile(patchFile,JSON.stringify(buildDshPatch(settings,cwd,writeMode,guard,persona,readRoots),null,2),{encoding:'utf8',mode:0o600});
     return {home,name,env:isolated,patchFile};
   }
 
@@ -429,8 +445,12 @@ export class DshAdapter implements Adapter {
       const deny = options.find(option => option.kind === 'reject_once');
       const reply = (optionId?:string) => {if(connection===this.rpc&&connection?.isOpen)connection.send({jsonrpc:'2.0',id:packet.id,result:{outcome:optionId ? {outcome:'selected',optionId} : {outcome:'cancelled'}}});};
       if (!this.context || this.stopped || params.sessionId !== this.sessionId) {reply();return;}
-      const reason = dshPermissionDenial(name,args,dshSessionPolicy(this.context.settings.permissions.dsh,this.context.session.writeMode),this.context.cwd);
+      const roomFiles = roomProjectFiles(this.context), readRoots = roomFiles ? [roomFiles] : [];
+      const reason = dshPermissionDenial(name,args,dshSessionPolicy(this.context.settings.permissions.dsh,this.context.session.writeMode),this.context.cwd,readRoots);
       if (reason) {this.context.emit('warning','DSH 权限请求已拒绝：'+reason,undefined,'derived');reply(deny?.optionId);return;}
+      // Reading the meeting room's own project needs no separate approval.
+      const allowOnce = options.find(option => option.kind === 'allow_once');
+      if (allowOnce && dshReadRootAllowed(name,args,readRoots)) {reply(allowOnce.optionId);return;}
       const context = this.context;
       const answer = await context.approve({type:'approval',title:name+' 请求本次操作许可',detail:JSON.stringify(args,null,2),options:options.filter(option=>['allow_once','reject_once'].includes(option.kind)).map(option=>({id:option.optionId,label:option.kind==='allow_once'?'仅允许这次':'拒绝'})),
         allowChoice:options.find(option=>option.kind==='allow_once')?.optionId,denyChoice:options.find(option=>option.kind==='reject_once')?.optionId,
@@ -446,9 +466,9 @@ export class DshAdapter implements Adapter {
     }
   }
 
-  private async launch(settings:Settings, env:NodeJS.ProcessEnv, cwd:string, writeMode:boolean, register?:(child:ChildProcess)=>void, persona?:string) {
+  private async launch(settings:Settings, env:NodeJS.ProcessEnv, cwd:string, writeMode:boolean, register?:(child:ChildProcess)=>void, persona?:string, readRoots:string[]=[]) {
     const file = await this.command(settings);
-    const prepared = await this.prepare(file,settings,env,cwd,writeMode,persona);
+    const prepared = await this.prepare(file,settings,env,cwd,writeMode,persona,readRoots);
     const runner = this.runner(file,prepared.env);
     this.stderr='';this.sessionId=undefined;this.toolCalls.clear();this.promptSent=false;this.promptAcknowledged=false;this.sessionClosed=false;this.terminal=undefined;
     this.retiredTurns.clear();
@@ -480,7 +500,10 @@ export class DshAdapter implements Adapter {
       const account=await this.accountStatus(settings,env);
       if(account.balance){result.quota={accountBalance:account.balance};result.quotaCheckedAt=account.balance.checkedAt;}
       result.runtimeReady=account.state==='signed-out';
-      if(!account.authenticated){result.auth=account.state==='signed-out'?'none':'unknown';result.detail=account.state==='signed-out'?'DeepSeek 还未登录，请点击登录。':'DeepSeek 的登录暂时无法确认，请检查网络或重新检测连接。';return result;}
+      if(account.state==='signed-out'){result.auth='none';result.detail='DeepSeek 还未登录，请点击登录。';return result;}
+      // DSH deletes its own grant when DeepSeek rejects it, so a stored grant whose online check
+      // failed is a network problem, not a lost login. The local recheck below stays authoritative.
+      const onlineUnverified=!account.authenticated;
       result.auth='account';
       await this.launch(settings,isolated,home,false);
       result.capabilities.images = this.imagePrompts;
@@ -497,7 +520,7 @@ export class DshAdapter implements Adapter {
       result.auth='account';
       result.available=true;
       result.runtimeReady=true;
-      result.detail='独立账号已登录，ACP 初始化与会话控制已验证；无需 DSH 桌面运行，无需 API Key。未发送模型任务。';
+      result.detail=onlineUnverified?'独立账号登录仍在，ACP 初始化与会话控制已验证；DeepSeek 账号在线核对这次没有完成（多为网络波动），余额稍后再刷新。未发送模型任务。':'独立账号已登录，ACP 初始化与会话控制已验证；无需 DSH 桌面运行，无需 API Key。未发送模型任务。';
     } catch(error) {result.available=false;if(result.auth!=='account')result.auth='unknown';result.detail=String(redact((error as Error).message));}
     finally {await this.cleanup().catch(error=>{result.available=false;result.detail+='；'+(error as Error).message;});}
     return result;
@@ -515,14 +538,17 @@ export class DshAdapter implements Adapter {
       const stamp = await this.runtimeFingerprint(ctx), reuse = reusable && this.stamp === stamp;
       if (!reuse) {await this.cleanup();const file=await this.command(ctx.settings);observeVersion(await compatibilityStep('version',()=>this.collect(file,['--version'],env,ctx.cwd)));}
       if (!reuse || Date.now()-this.accountCheckedAt >= 5*60*1000) {
-        // Chat preflight checks authentication only; balance refresh never slows a new round.
-        const account=await this.accountStatus(ctx.settings,ctx.env,'auth');
-        if(!account.authenticated)throw new Error('DSH 独立账号未登录或认证不可用，请在 AIROOM 设置中点击 DSH 登录。');
+        // Chat preflight reads the stored login only. An expired grant is rejected by DeepSeek on
+        // the first request and removed by DSH itself, so a slow or failed online profile query
+        // must not stop the round or read as a lost login.
+        const account=await this.accountStatus(ctx.settings,ctx.env,'state');
+        if(account.state==='signed-out')throw new Error('DSH 独立账号已退出登录，请在成员设置里重新登录。');
+        if(!account.authenticated)throw new Error('DSH 本地登录记录暂时无法读取，请重新检测连接。');
         observeAccount('account');this.accountCheckedAt=Date.now();
       }
       ctx.recordTiming?.('preflight');
       if (this.stopped) return {stopped:true};
-      if (!reuse) await this.launch(ctx.settings,env,ctx.cwd,ctx.session.writeMode,child=>ctx.registerProcess(child),ctx.persona);
+      if (!reuse) await this.launch(ctx.settings,env,ctx.cwd,ctx.session.writeMode,child=>ctx.registerProcess(child),ctx.persona,roomProjectFiles(ctx)?[roomProjectFiles(ctx)!]:[]);
       this.stamp=stamp;this.reusable=true;this.sessionClosed=false;
       if (this.stopped) return {stopped:true};
       const nativeId=ctx.session.purpose==='room-hand'?undefined:ctx.session.nativeId;

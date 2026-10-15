@@ -3,7 +3,8 @@ import { CheckCircle2, CircleHelp, Download, Info, LoaderCircle, RefreshCw, Save
 import type { Project } from '../shared/types';
 import type { LogExport, LogReceipt, LogTarget, WorkLogEntry, WorkLogPage } from '../shared/work-log';
 import { Modal } from './modals';
-import { time, type Invoke } from './ui';
+import { RUN_LABELS, time, type Invoke } from './ui';
+const DELIVERY: Record<string, string> = { prepared: '未发出', sent: '已发出', confirmed: '已送达', unknown: '送达待核对', withdrawn: '已撤回' };
 import { terminalText } from '../shared/display-text';
 import { Avatar, useTeam } from './members';
 
@@ -56,7 +57,7 @@ export function WorkLog({ project, target, invoke, onClose }: { project: Project
       </div>
       <p className="work-log-hint">只查看已经记下的内容，不会给成员发任务。缺少退出码时显示“未知”，成员自己的说明不等于命令真的成功。</p>
       {data && (data.runs.length > 0 || data.records.length > 0) && <div className="work-log-meta">
-        {data.runs.length > 0 && <details><summary>参与的运行 {data.runs.length} 次</summary>{data.runs.map(run => <p key={run.id} className="task-meta"><MemberName id={run.memberId} /> · {STAGE[run.stage] ?? run.stage} · {run.status} · 投递 {run.delivery}{run.error ? ' · ' + run.error : ''}<br/>{run.configuration??'这次运行未记录配置'}</p>)}</details>}
+        {data.runs.length > 0 && <details><summary>参与的运行 {data.runs.length} 次</summary>{data.runs.map(run => <p key={run.id} className="task-meta"><MemberName id={run.memberId} /> · {STAGE[run.stage] ?? run.stage} · {(RUN_LABELS as Record<string,string>)[run.status] ?? run.status} · {DELIVERY[run.delivery] ?? run.delivery}{run.error ? ' · ' + run.error : ''}<br/>{run.configuration??'这次运行未记录配置'}</p>)}</details>}
         {data.records.length > 0 && <details><summary>成员的提交和检查说明 {data.records.length} 条</summary>{data.records.map(record => <p key={record.id} className="work-log-record">{record.text}</p>)}</details>}
       </div>}
       {data && (entries.length ? <ol className="work-log-list">{entries.map(entry => <WorkLogEntryView key={entry.id} entry={entry} />)}</ol> : <p className="task-meta">这个范围内暂时没有日志条目。</p>)}

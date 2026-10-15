@@ -1,7 +1,7 @@
 import { FLOW_CONTRACTS, contractHint } from './flow-contract';
 import { FLOW_LIMITS, FlowError, type MeetingResponse, type PlanPayload, type ReviewPayload, type SubmissionPayload, type RoundReport,type ReviewFinding,type NextRoundRecommendation,type Task,type CompletionCriterion } from './project-flow';
 import {rejectUserCriteria} from './project-flow-review';
-import {hasInferredCommand,normalizeFlowPayload,parseCompatibleJson} from './flow-format';
+import {AMBIGUOUS_FIELDS,hasInferredCommand,normalizeFlowPayload,parseCompatibleJson} from './flow-format';
 
 const fail=(message:string):never=>{throw new FlowError('INVALID_PROTOCOL',message);};
 export function object(value:unknown,keys:string[],required=keys):Record<string,unknown> {
@@ -29,7 +29,7 @@ export function scopePath(value:string){const normalized=value.replaceAll('\\','
 export const pathWithin=(file:string,scope:string)=>{const f=file.replaceAll('\\','/').toLowerCase(),s=scope.toLowerCase();return s==='.'||f===s||f.startsWith(s+'/');};
 export const scopesOverlap=(a:string[],b:string[])=>a.some(x=>b.some(y=>pathWithin(x,y)||pathWithin(y,x)));
 /** Find a top-level JSON object without confusing braces inside strings with object boundaries. */
-function lastReplyObject(raw:string):unknown {
+function lastReplyObject(raw:string,onRepair?:()=>void):unknown {
   let start=-1,quoted=false,escaped=false,found=false,last:unknown,lastError:string|undefined;const stack:string[]=[];
   for(let i=0;i<raw.length;i++){
     const char=raw[i];
@@ -48,19 +48,35 @@ function lastReplyObject(raw:string):unknown {
     // An empty "{}" in later prose carries nothing and never replaces a reply found before it.
     try{const value=parseCompatibleJson(candidate);if(found&&!fieldLike)continue;last=value;found=true;lastError=undefined;}catch{if(fieldLike)lastError='最后的正式 JSON 回复有语法错误。';}
   }
-  if(start>=0)return fail('最后的 JSON 回复不完整，请返回完整对象。');
+  if(start>=0){
+    // Only close containers. JSON.parse still rejects missing values, commas and unfinished strings.
+    if(!quoted&&raw[start]==='{'){
+      const tail=raw.slice(start).trim().replace(/\s*```\s*$/, '').trimEnd();
+      try{last=JSON.parse(tail+[...stack].reverse().map(c=>c==='{'?'}':']').join(''));found=true;lastError=undefined;onRepair?.();}
+      catch{return fail('最后的 JSON 回复不完整，请返回完整对象。');}
+    }else return fail('最后的 JSON 回复不完整，请返回完整对象。');
+  }
   if(lastError)return fail(lastError);
   if(!found)return fail('未找到完整 JSON 对象。');
   return last;
 }
-export function parseReply(raw:string,kind:string):unknown {
+export function parseReply(raw:string,kind:string,onRepair?:()=>void):unknown {
   if(new TextEncoder().encode(raw).byteLength>FLOW_LIMITS.replyBytes)return fail('结构化回复超过 128 KiB。');
-  let parsed:unknown;try{parsed=parseCompatibleJson(raw.trim());}catch{parsed=lastReplyObject(raw);}
+  let parsed:unknown;try{parsed=parseCompatibleJson(raw.trim());}catch{parsed=lastReplyObject(raw,onRepair);}
   const incoming=object(parsed,Object.keys(parsed&&typeof parsed==='object'?parsed:{}));
   // The dispatched operation already supplies these routing labels. Missing labels do not
   // invalidate a reply; explicit mismatches still cannot be consumed by another operation.
   if(['protocol','version','kind','payload'].some(key=>Object.hasOwn(incoming,key))){
-    const envelope=object(incoming,['protocol','version','kind','payload'],['payload']);
+    const payloadKeys=[...(FLOW_CONTRACTS[kind]?.allowed??[]),...(kind==='integration-check'?['report','nextRoundRecommendation']:[])];
+    const envelope=object(incoming,['protocol','version','kind','payload',...payloadKeys],['payload']);
+    if(envelope.payload&&typeof envelope.payload==='object'&&!Array.isArray(envelope.payload)){
+      const payload={...envelope.payload as Record<string,unknown>};
+      for(const key of payloadKeys.filter(key=>Object.hasOwn(envelope,key))){
+        if(Object.hasOwn(payload,key)&&JSON.stringify(payload[key])!==JSON.stringify(envelope[key]))throw new FlowError(AMBIGUOUS_FIELDS,'回复内外层的 '+key+' 内容不一致，已保留原回复，请明确采用哪一份。');
+        payload[key]=envelope[key];
+      }
+      envelope.payload=payload;
+    }
     if(envelope.protocol!==undefined&&envelope.protocol!=='airoom.project-flow'||envelope.version!==undefined&&envelope.version!==1||envelope.kind!==undefined&&envelope.kind!==kind)return fail('协议名称、版本或用途不匹配。');
     return normalizeFlowPayload(envelope.payload,kind,true);
   }
@@ -97,10 +113,10 @@ function evidence(value:unknown):SubmissionPayload['evidence'] {
     if(!['command','quote','inspection','source'].includes(String(e.kind)))return fail('验证依据 kind 只能是 command、quote、inspection 或 source，收到 "'+String(e.kind).slice(0,40)+'"。');
     if(e.kind==='source'){
       const sourceText=(value:unknown,field:string)=>{try{return text(value);}catch{return fail(`evidence[${index}].${field} 必须是非空字符串，长度不超过 20000 字符。请只补正这个字段，保留原来源位置和引用原文。`);}};
-      const location=sourceText(e.location,'location'),excerpt=sourceText(e.excerpt,'excerpt');
+      const location=absent(e.location)?'':sourceText(e.location,'location'),excerpt=absent(e.excerpt)?'':sourceText(e.excerpt,'excerpt');
       // A display label is not source evidence. Fill it from existing metadata, without a model call.
       const missingTitle=e.title==null||typeof e.title==='string'&&!e.title.trim();
-      const title=sourceText(missingTitle?(typeof e.description==='string'&&e.description.trim()?e.description:location):e.title,'title');
+      const title=sourceText(missingTitle?(typeof e.description==='string'&&e.description.trim()?e.description:location||'未完整标注的来源'):e.title,'title');
       if(/^[a-z]+:/i.test(location)&&!/^[a-z]:[\\/]/i.test(location)){try{if(!['http:','https:'].includes(new URL(location).protocol))return fail('来源链接只支持 http 或 https。');}catch{return fail('来源链接无效。');}}
       return {kind:'source' as const,title,location,excerpt,description:e.description===undefined?title:text(e.description),result:e.result===undefined?excerpt:text(e.result),eventIds:e.eventIds===undefined?[]:texts(e.eventIds,true),source:'reported' as const,sourceVerification:'unverified' as const,sourceNote:'尚未核对来源和引用。'};
     }
@@ -109,7 +125,21 @@ function evidence(value:unknown):SubmissionPayload['evidence'] {
   });
 }
 function criteria(value:unknown,allowEmpty=false){if(!Array.isArray(value)||!allowEmpty&&!value.length||value.length>100)return fail('需要逐项核对完成标准。');return value.map(x=>{const c=object(x,['criterion','verified','evidence']);return {criterion:text(c.criterion),verified:bool(c.verified),evidence:text(c.evidence,true)};});}
-export function validateSubmission(raw:unknown):SubmissionPayload {const p=object(normalizeFlowPayload(raw,'submission'),FLOW_CONTRACTS.submission.allowed,['summary','evidence']);let disputes:SubmissionPayload['disputes'];if(p.disputes!==undefined){if(!Array.isArray(p.disputes)||p.disputes.length>100)return fail('异议列表无效。');disputes=p.disputes.map(raw=>{const d=object(raw,['findingId','reason']);return {findingId:text(d.findingId),reason:text(d.reason)};});if(new Set(disputes.map(d=>d.findingId)).size!==disputes.length)return fail('同一问题不能重复提出异议。');}return {...(typeof p.userSummary==='string'&&p.userSummary.trim()?{userSummary:p.userSummary.trim().slice(0,2000)}:{}),summary:text(p.summary),evidence:evidence(p.evidence),completionResults:criteria(p.completionResults??[],true),...(disputes?{disputes}:{}),...(p.outOfScopeExplanation!==undefined?{outOfScopeExplanation:text(p.outOfScopeExplanation,true)}:{})};}
+const absent=(value:unknown)=>value==null||typeof value==='string'&&!value.trim();
+function submissionSummary(p:Record<string,unknown>,notes:string[]){
+  if(!absent(p.summary))return text(p.summary);
+  if(typeof p.userSummary==='string'&&p.userSummary.trim()){notes.push('未单独填写成果摘要，沿用成员已有说明。');return text(p.userSummary);}
+  if(!Object.values(p).some(value=>typeof value==='string'?Boolean(value.trim()):Array.isArray(value)&&value.length))return fail('成果回复没有可保留的正文或记录。');
+  notes.push('成员未单独填写成果说明；请结合实际文件和复核记录查看。');
+  return '成员已提交记录，未单独填写成果说明。';
+}
+export function validateSubmission(raw:unknown):SubmissionPayload {
+  const p=object(normalizeFlowPayload(raw,'submission'),FLOW_CONTRACTS.submission.allowed,[]),replyNotes:string[]=[];
+  const summary=submissionSummary(p,replyNotes),items=p.evidence??[];
+  if(Array.isArray(items)&&!items.length)replyNotes.push('未单独提供检查依据，成果保留，完成情况由后续复核或用户验收确认。');
+  let disputes:SubmissionPayload['disputes'];if(p.disputes!==undefined){if(!Array.isArray(p.disputes)||p.disputes.length>100)return fail('异议列表无效。');disputes=p.disputes.map(raw=>{const d=object(raw,['findingId','reason']);return {findingId:text(d.findingId),reason:text(d.reason)};});if(new Set(disputes.map(d=>d.findingId)).size!==disputes.length)return fail('同一问题不能重复提出异议。');}
+  return {...(typeof p.userSummary==='string'&&p.userSummary.trim()?{userSummary:p.userSummary.trim().slice(0,2000)}:{}),summary,evidence:Array.isArray(items)&&!items.length?[]:evidence(items),completionResults:criteria(p.completionResults??[],true),...(replyNotes.length?{replyNotes}:{}),...(disputes?{disputes}:{}),...(p.outOfScopeExplanation!==undefined?{outOfScopeExplanation:text(p.outOfScopeExplanation,true)}:{})};
+}
 export function validateReview(raw:unknown,requiredCriteria:string[],previous:ReviewFinding[]=[]):ReviewPayload {
   const supplied=object(normalizeFlowPayload(raw,'review'),FLOW_CONTRACTS.review.allowed,[]);
   // Missing fields are tolerated below; a reply with no fields at all has nothing to keep.
@@ -127,9 +157,13 @@ export function validateReview(raw:unknown,requiredCriteria:string[],previous:Re
   for(const check of previousFindingChecks??[])if(!check.resolved&&check.evidence&&!findings.some(f=>f.previousFindingId===check.findingId)){const old=previous.find(f=>f.id===check.findingId);if(old)findings.push({location:old.location,kind:old.kind,severity:old.severity,evidence:check.evidence,request:old.request,previousFindingId:old.id});}
   return {verdict:p.verdict as ReviewPayload['verdict'],verificationComplete:bool(p.verificationComplete),criteriaResults:criteria(p.criteriaResults,true),findings,evidence:Array.isArray(p.evidence)&&p.evidence.length===0?[]:evidence(p.evidence),...(previousFindingChecks?{previousFindingChecks}:{}),...(p.assessments===undefined?{}:{assessments:assessments(p.assessments)}),...(p.strengths===undefined?{}:{strengths:texts(p.strengths,true)})};
 }
-export function validateReport(raw:unknown):RoundReport {const p=payloadObject(raw,'round-report');let meetingResponses:MeetingResponse[]|undefined;
+export function validateReport(raw:unknown,taskKeys:string[]=[]):RoundReport {const p=object(normalizeFlowPayload(raw,'round-report'),FLOW_CONTRACTS['round-report'].allowed,[]),replyNotes:string[]=[];
+  const summary=submissionSummary(p,replyNotes);
+  if(p.completedTaskKeys==null)replyNotes.push('未单独列出任务编号，已按本轮实际任务记录关联。');
+  if(p.deliverables==null)replyNotes.push('未单独列出交付物，请查看本轮实际文件改动。');
+  let meetingResponses:MeetingResponse[]|undefined;
   if(p.meetingResponses!==undefined){if(!Array.isArray(p.meetingResponses)||p.meetingResponses.length>200)return fail('会议要求处理列表无效。');meetingResponses=p.meetingResponses.map(raw=>{const item=object(raw,['messageId','disposition','summary','paths']);if(!['noted','answered','in-scope-fix','scope-change','needs-user'].includes(String(item.disposition)))return fail('会议要求处理方式无效。');return {messageId:text(item.messageId),disposition:item.disposition as MeetingResponse['disposition'],summary:text(item.summary),paths:texts(item.paths??[],true).map(scopePath)};});}
-  return {summary:text(p.summary),completedTaskKeys:texts(p.completedTaskKeys,true),deliverables:texts(p.deliverables),validationSummary:text(p.validationSummary),remainingIssues:texts(p.remainingIssues??[],true),nextRoundSummary:text(p.nextRoundSummary??'',true),userDecisionNeeded:text(p.userDecisionNeeded??'',true),...(meetingResponses?{meetingResponses}:{})};}
+  return {summary,completedTaskKeys:texts(p.completedTaskKeys??taskKeys,true),deliverables:texts(p.deliverables??[],true),validationSummary:absent(p.validationSummary)?'成员未单独提供验证说明，请以本轮实际复核记录为准。':text(p.validationSummary),remainingIssues:texts(p.remainingIssues??[],true),nextRoundSummary:text(p.nextRoundSummary??'',true),userDecisionNeeded:text(p.userDecisionNeeded??'',true),...(replyNotes.length?{replyNotes}:{}),...(meetingResponses?{meetingResponses}:{})};}
 export function validateNextRound(raw:unknown,tasks:Task[],userName=''):NextRoundRecommendation {
   const p={...payloadObject(raw,'next-round')};p.taskAdjustments??=[];
   if(!['as-planned','adjusted','replan'].includes(String(p.mode))||!Array.isArray(p.taskAdjustments)||p.taskAdjustments.length>FLOW_LIMITS.tasks)return fail('下一轮建议结构无效。');
@@ -171,7 +205,7 @@ function stagePolicy(kind:string,fields:unknown){
   const allowed=FLOW_CONTRACTS[kind]?.allowed??[];
   const rules=[allowed.includes('evidence')?FLOW_EVIDENCE_RULES:''];
   if(reviewStages.has(kind))rules.push('verdict 只能是 pass、changes_requested 或 inconclusive。findings 不加 title、detail 等其他字段；旧问题可用 previousFindingId 引用材料中的真实 id。',REVIEW_DECISION_RULES);
-  if(planningStages.has(kind))rules.push(FLOW_CRITERIA_RULES,'check 为可核对事实、judge 由成员评价、owner 由用户决定。completionCriteria 不能仅重复本轮目标；涉及用户确认或验收的标准必须标成 owner；产品界面、文档行为可以作为标准。');
+  if(planningStages.has(kind))rules.push(FLOW_CRITERIA_RULES,'check 为可核对事实、judge 由成员评价、owner 由用户决定。completionCriteria 不能仅重复本轮目标；涉及用户确认或验收的标准必须标成 owner；产品界面、文档行为可以作为标准。需要用户在真实浏览器/设备中亲自操作、而执行成员没有相应工具的实操验收标为 owner；可通过代码、命令或自动化测试核对的产品行为仍为 check，不能一概转给用户。');
   if(kind==='submission')rules.push('check 类逐条填写 completionResults；judge 由成员评价，不因没有 verified 判无法下结论；owner 留待用户验收，不要求成员验证用户已同意。');
   if(kind==='joint-independent'||kind==='joint-peer')rules.push('问题只使用所列 findings 字段，不加 title、detail 或自行生成 id；缺材料记 suspected，查明真实缺陷才记 verified；不要把建议或未核实事项编造成已核实问题。');
   if(fields&&typeof fields==='object'&&'nextRoundRecommendation' in fields)rules.push(FLOW_CRITERIA_RULES);

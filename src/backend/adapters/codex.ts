@@ -9,7 +9,7 @@ import { NativeResponseError, failureKind } from '../adapter-failure';
 import { fileStamp, runtimeFingerprint } from '../runtime-pool';
 import { latestPersona } from '../native-context';
 import { codexImages } from './images';
-import { plainRoomSpeech } from './chat-policy';
+import { plainRoomSpeech, roomProjectFiles } from './chat-policy';
 import { collectCommand, describe, errorText, JsonLineRpc, object, prepareCliLaunch, resolveCli, spawnCli, subscriptionEnvironment, type RpcMessage } from './common';
 
 /** AIROOM rules plus a Windows note: PowerShell 5.1 reads BOM-less UTF-8 as the ANSI code page (mojibake for Chinese). */
@@ -257,6 +257,9 @@ export class CodexAdapter implements Adapter {
       const command = resolveCli('codex', context.settings, env);
       if(!reuse){const version=await collectCommand(command,['--version'],env,context.cwd);if(version.code!==0)throw new Error('Codex CLI 版本检查失败，任务尚未发送。');}
       const policy = codexSessionPolicy(context.settings.permissions.codex, context.session.writeMode,context.session.autoApprove);
+      // Project rooms read files through the shell: read-only sandbox, only known-safe commands run, every ask is declined.
+      const roomFiles = roomProjectFiles(context);
+      if (roomFiles) Object.assign(policy, { approvalPolicy: 'untrusted', sandbox: 'read-only', declineCommands: true });
       if (!reuse) await this.closeTransport();
       if (!reuse) {this.retiredTurns.clear();this.freshThreads=0;}
       const connected = reuse ? {
@@ -285,7 +288,7 @@ export class CodexAdapter implements Adapter {
         cwd: context.cwd, modelProvider: 'openai', approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox, developerInstructions: `${CODEX_DEVELOPER_INSTRUCTIONS}\n\n${latestPersona(context.persona)}`,
       };
       const inRoom = context.run.projectId==='lounge' || Boolean(context.session.purpose?.startsWith('room-')) || context.roomRuntime;
-      const toolConfig={...codexToolConfig(context.settings.permissions.codex),...(inRoom?{'features.image_generation':context.run.imageGeneration===true&&context.settings.permissions.codex.network}:{} ),...(plainRoomSpeech(context)?{'features.shell_tool':false,'features.unified_exec':false,'features.multi_agent':false,'features.apps':false,'features.browser_use':false,'features.in_app_browser':false,web_search:'disabled'}:{})};
+      const toolConfig={...codexToolConfig(context.settings.permissions.codex),...(inRoom?{'features.image_generation':context.run.imageGeneration===true&&context.settings.permissions.codex.network}:{} ),...(plainRoomSpeech(context)?{'features.shell_tool':false,'features.unified_exec':false,'features.multi_agent':false,'features.apps':false,'features.browser_use':false,'features.in_app_browser':false,web_search:'disabled'}:{}),...(roomFiles?{'features.shell_tool':true}:{})};
       if(Object.keys(toolConfig).length)parameters.config=toolConfig;
       // Each image request gets its own native turn/context. Large image history is not replayed or persisted.
       // Validate choices against this running CLI's catalogue when it reports one.
@@ -481,7 +484,7 @@ export class CodexAdapter implements Adapter {
       return { answers };
     }
     if (message.method === 'item/commandExecution/requestApproval' && this.declineCommands) {
-      context.emit('warning', 'Codex 请求执行命令，但当前权限设置为禁止命令，已自动拒绝。', { command: params.command }, 'derived');
+      context.emit('warning', roomProjectFiles(context) ? '会议聊天只允许查看文件，Codex 请求的命令需要审批，已自动拒绝。' : 'Codex 请求执行命令，但当前权限设置为禁止命令，已自动拒绝。', { command: params.command }, 'derived');
       return { decision: 'decline' };
     }
     if(message.method==='item/fileChange/requestApproval'&&!context.session.writeMode)return {decision:'decline'};

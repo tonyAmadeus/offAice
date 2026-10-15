@@ -15,11 +15,12 @@ export interface FormatCorrection {
   outcome: 'corrected' | 'failed' | 'skipped';
   operationId?: string; runId?: string; replyAt?: string;
 }
-export type FormatCategory = 'syntax' | 'envelope' | 'missing-field' | 'extra-field' | 'value' | 'empty-text' | 'evidence' | 'ambiguous' | 'other';
+export type FormatCategory = 'unclosed-tail' | 'syntax' | 'envelope' | 'missing-field' | 'extra-field' | 'value' | 'empty-text' | 'evidence' | 'ambiguous' | 'other';
 
 /** Coarse groups are enough to see which tolerance would help most. */
 export function formatCategory(error: unknown): FormatCategory {
   const code = error instanceof FlowError ? error.code : '', message = error instanceof Error ? error.message : String(error);
+  if (code === 'UNCLOSED_TAIL') return 'unclosed-tail';
   if (code === AMBIGUOUS_FIELDS) return 'ambiguous';
   if (code === 'UNVERIFIED_EVIDENCE' || /依据|来源|命令/.test(message)) return 'evidence';
   if (/语法|括号|不完整|未找到完整 JSON|JSON 对象|空对象/.test(message)) return 'syntax';

@@ -28,7 +28,7 @@ export function RoundResults({ projectId, roundId, integrationId, invoke, defaul
   function load() { setExpanded(true); void perform(() => invoke<Results>('projectFlow.round.results', context), setData); }
   useEffect(() => { if (defaultOpen) load(); }, [integrationId]);
   function show(path: string, source: ResultPreview['source']) { setPreview(null); void perform(() => invoke<ResultPreview>('projectFlow.round.preview', { ...context, path, source }), setPreview); }
-  function open(path: string, mode: 'open' | 'reveal') { void perform(() => invoke<{ revealed?: boolean }>('project.openPath', { ...context, relativePath: path, mode }), result => { if (result.revealed && mode === 'open') setNotice('这类文件只在文件夹中显示，不会直接运行。'); }); }
+  function open(path: string, mode: 'open' | 'reveal', source?: 'submitted') { void perform(() => invoke<{ revealed?: boolean }>('project.openPath', { ...context, relativePath: path, mode, ...(source ? { source } : {}) }), result => { if (result.revealed && mode === 'open') setNotice('这类文件只在文件夹中显示，不会直接运行。'); if (source) setNotice('已在文件夹中显示本轮提交版本。这是 AIROOM 保存的副本，请不要在里面修改；要改项目文件请先验收写入。'); }); }
   const files=data?.files.filter(file=>!paths||paths.includes(file.path))??[];
   const changed = files.filter(file => file.kind !== 'unchanged' || file.deliverable);
   const visible = all ? files : changed;
@@ -50,6 +50,9 @@ export function RoundResults({ projectId, roundId, integrationId, invoke, defaul
               {icon(file.path, file.kind)}<span className="result-path">{file.path}</span>{file.deliverable && <span className="result-tag">交付</span>}<span className="result-kind">{KIND[file.kind]}</span>
             </button>
             {toRoundtable&&file.kind!=='deleted'&&<button className="link-button" aria-label={'送去圆桌评审 '+file.path} onClick={()=>toRoundtable({projectId,integrationId,path:file.path})}>送去圆桌</button>}
+            {!data.applied && file.kind !== 'deleted' && <span className="result-file-tools">
+              <button type="button" className="icon-button" disabled={busy} title="在文件夹中显示本轮提交版本（AIROOM 保存的副本）" aria-label={`在文件夹中显示本轮提交版本 ${file.path}`} onClick={() => open(file.path, 'reveal', 'submitted')}><FolderOpen size={14} /></button>
+            </span>}
             {data.applied && file.kind !== 'deleted' && <span className="result-file-tools">
               <button type="button" className="icon-button" disabled={busy} title="查看项目当前文件" aria-label={`查看项目当前文件 ${file.path}`} onClick={() => show(file.path, 'current')}><FileCheck2 size={14} /></button>
               <button type="button" className="icon-button" disabled={busy} title="在文件夹中显示" aria-label={`在文件夹中显示 ${file.path}`} onClick={() => open(file.path, 'reveal')}><FolderOpen size={14} /></button>

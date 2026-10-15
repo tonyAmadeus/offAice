@@ -26,6 +26,8 @@ import type {
   Run,
   TimelineEvent,
   RoomId,
+  RoomMessage,
+  MemberQuota,
 } from "../shared/types";
 import { FlowArtifacts } from "./project-flow-artifacts";
 import {
@@ -572,6 +574,7 @@ export class ProjectFlowController {
   }
   private quotaWaitCurrent(wait: QuotaWait, flow: ProjectFlow) {
     if (flow.status !== "active") return false;
+    if (wait.operationId) return this.store.get<FlowOperation>("flow_operations", wait.operationId)?.state === "blocked";
     const task = this.store.get<Task>("flow_tasks", wait.targetId);
     if (task)
       return (
@@ -608,14 +611,23 @@ export class ProjectFlowController {
     );
   }
   private reconcileQuotaWaits(flow: ProjectFlow) {
-    for (const wait of this.store
-      .list<QuotaWait>("flow_quota_waits")
-      .filter((w) => w.flowId === flow.id && w.status !== "resolved"))
-      if (
-        !this.quotaWaitCurrent(wait, flow) ||
-        this.quotaFor(flow, wait.memberId)
-      )
-        this.resolveQuotaWait(wait);
+    for (const wait of this.store.list<QuotaWait>("flow_quota_waits").filter(w => w.flowId === flow.id && w.status !== "resolved")) {
+      if (!this.quotaWaitCurrent(wait, flow)) { this.resolveQuotaWait(wait); continue; }
+      if (wait.operationId) {
+        const member = this.store.members().find(m => m.id === wait.memberId);
+        const quota = this.store.get<MemberQuota>("quotas", member?.executor ?? wait.memberId);
+        const freshRecovery = quota && quota.checkedAt > wait.startedAt && quota.windows.some(w => w.usedPercent !== undefined && w.usedPercent < 100) && this.quotaFor(flow, wait.memberId);
+        if (!wait.readyToResume && (wait.resetAt ? Date.now() >= wait.resetAt * 1000 : freshRecovery)) {
+          this.update("flow_quota_waits", wait, {readyToResume: true});
+          const message = "成员额度预计已恢复，可点击接着做，沿用原会话继续。";
+          const task = this.store.get<Task>("flow_tasks", wait.targetId);
+          if (task?.status === "blocked") this.update("flow_tasks", task, {blockedReason: message});
+          const operation = this.store.get<FlowOperation>("flow_operations", wait.operationId);
+          if (operation) this.update("flow_operations", operation, {error: message});
+          this.host.changed();
+        }
+      } else if (this.quotaFor(flow, wait.memberId)) this.resolveQuotaWait(wait);
+    }
   }
   private recover() {
     this.store.transaction(() => {
@@ -1001,6 +1013,19 @@ export class ProjectFlowController {
         );
       await this.checkRequirements(op);
       let result = await this.host.run(op.sessionId!, prompt, op.id);
+      if (result.status === "rate_limited") {
+        const task = this.store.get<Task>("flow_tasks", op.targetId);
+        const integration = this.store.get<Integration>("flow_integrations", op.targetId);
+        const quota = this.store.get<MemberQuota>("quotas", member.provider);
+        const resets = (quota?.windows ?? []).filter(w => w.exhausted || (w.usedPercent ?? 0) >= 100).map(w => w.resetsAt).filter((n): n is number => typeof n === "number" && n * 1000 > Date.now());
+        const resetAt = resets.length ? Math.max(...resets) : undefined;
+        const stage = (op.kind === "task" ? "task" : kind) as QuotaWait["stage"];
+        if (Object.hasOwn(QUOTA_STAGE_LABELS, stage)) {
+          const wait: QuotaWait = {...this.record(op.projectId, op.flowId), targetId: task?.id ?? integration?.roundId ?? op.targetId, memberId: member.memberId ?? member.provider, stage, startedAt: at(), status: "waiting", operationId: op.id, resetAt};
+          this.store.put("flow_quota_waits", wait.id, wait);
+        }
+        throw new FlowError("RATE_LIMITED", "成员额度已用完，已保留当前会话和成果。" + (resetAt ? "预计恢复时间：" + new Date(resetAt * 1000).toLocaleString("zh-CN") + "；到点会提示接着做。" : "恢复时间尚未提供；额度恢复后可接着做。"));
+      }
       if (!["ended", "completed"].includes(result.status))
         throw new FlowError(
           result.status === "unknown" ? "UNKNOWN_RESULT" : "RUN_BLOCKED",
@@ -1009,9 +1034,12 @@ export class ProjectFlowController {
       await this.checkRequirements(op);
       let original: unknown;
       try {
-        original = parseReply(result.text, kind);
+        let repairedTail = false;
+        original = parseReply(result.text, kind, () => { repairedTail = true; });
+        const payload = validate(original, result.runId);
+        if (repairedTail) recordFormatCorrection(this.store, { area: "project-flow", stage: kind, memberId: member.memberId, executor: member.provider, operationId: op.id, runId: result.runId, error: new FlowError("UNCLOSED_TAIL", "已补齐回复尾部闭合括号，内容未改写。"), outcome: "corrected" });
         return {
-          payload: validate(original, result.runId),
+          payload,
           runId: result.runId,
         };
       } catch (error) {
@@ -1049,6 +1077,7 @@ export class ProjectFlowController {
             ? await workspaceFingerprint(member.workspace)
             : undefined;
         try {
+        const originalText = result.text;
         result = await this.host.run(
           op.sessionId!,
           `仅补正上轮 JSON 格式，不再执行文件任务，不运行命令、不改文件。仅整理已有输出，不能新增验证声明。命令依据改成 inspection 时，保持 evidence 条数和顺序，原 result（包括句末标点）必须完整保留为前缀；可以在末尾补充原输出已有的信息（例如已有退出码），不能新增检查、改写原文或把未核实说成已核实。用途 ${kind}。错误：${(error as Error).message}\n原输出：${result.text.slice(0, FLOW_LIMITS.replyBytes)}\n${prompt.split("\n任务材料：")[0]}`,
@@ -1065,6 +1094,7 @@ export class ProjectFlowController {
             "格式补正改变了文件内容，已停止后续派发。",
           );
         await this.checkRequirements(op);
+        if (result.text.trim() === originalText.trim()) throw new FlowError("FORMAT_UNCHANGED", "成员原样返回了未通过的回复，格式补正未生效。原问题：" + (error as Error).message + " 请核对原回复后调整要求或重新安排任务。");
         const corrected = retainCommandProvenance(original, parseReply(result.text, kind));
         if (
           [
@@ -1150,6 +1180,7 @@ export class ProjectFlowController {
       : [];
     this.store.put("sessions", session.id, { ...session, flowId: flow.id });
     try {
+      const sourceRoundtables = await this.roundtableMaterials(flow);
       const sourceJointReview = flow.sourceJointReviewId
         ? await this.joint.sourceForPlan(
             flow.sourceJointReviewId,
@@ -1203,6 +1234,7 @@ export class ProjectFlowController {
             topic: flow.topic,
             discussion: flow.discussionContext,
             previousRecord: flow.previousRecord,
+            sourceRoundtables,
             sourceJointReview,
             sourceRoundtable,
             parentPlan: parent,
@@ -1212,7 +1244,7 @@ export class ProjectFlowController {
               .writeScopes ?? ["."],
             reviewLevel: reviewLevel(flow),
             rules:
-              "流程按用户配置安排个人或整轮复核、负责人汇报、用户验收；不要把这些自动阶段写成文件任务，标准分类为可核对的 check、成员评价的 judge、用户判断的 owner；只有 owner 可以写用户确认或偏好，不能让成员替用户作决定。只写本任务实际要修改的文件或文件夹，只读路径不用写入 allowedPaths。负责人每轮自己领的任务不超过任务数的三分之一，两人团队除外。没有变化的任务可用 reuse 指向旧任务 key，后台核实成员、范围、标准、依赖和起点后才沿用。同一个文件由前后串行的任务修改，用 dependencies 写清先后。",
+              "起草前先只读查看项目目录中与目标相关的现有文件，按实际文件结构安排任务和 allowedPaths，不修改文件。流程按用户配置安排个人或整轮复核、负责人汇报、用户验收；不要把这些自动阶段写成文件任务，标准分类为可核对的 check、成员评价的 judge、用户判断的 owner；只有 owner 可以写用户确认或偏好，不能让成员替用户作决定。只写本任务实际要修改的文件或文件夹，只读路径不用写入 allowedPaths。负责人每轮自己领的任务不超过任务数的三分之一，两人团队除外。没有变化的任务可用 reuse 指向旧任务 key，后台核实成员、范围、标准、依赖和起点后才沿用。同一个文件由前后串行的任务修改，用 dependencies 写清先后。",
           },
         ),
         (raw) => {
@@ -3698,6 +3730,7 @@ export class ProjectFlowController {
                 : lead;
           const cachedReport =
             stage === "round-report" &&
+            !round.manualAcceptance &&
             integration?.reportDraft &&
             integration.checkRunId &&
             JSON.stringify(integration.draftMeetingIds) ===
@@ -4524,6 +4557,7 @@ export class ProjectFlowController {
           verdict: result.payload.verdict,
           outcome: assessment.outcome,
           outcomeReasons: assessment.reasons,
+          deferredUserCriteria: assessment.deferredUserCriteria,
           verificationComplete: result.payload.verificationComplete,
           criteriaResults: result.payload.criteriaResults,
           assessments: result.payload.assessments,
@@ -5198,6 +5232,10 @@ export class ProjectFlowController {
             executionActivity: roundActivityMaterial(this.store, round),
             nextRound,
             nextTasks,
+            taskScopeEvidence: this.tasks(flow.id).filter(t => t.latestSubmissionId).map(t => {
+              const submission = this.need<Submission>("flow_submissions", t.latestSubmissionId!);
+              return {taskId: t.id, key: t.key, roundId: t.roundId, status: t.status, allowedPaths: t.allowedPaths, submissionId: submission.id, changes: submission.changes, outOfScopeChanges: submission.outOfScopeChanges};
+            }),
             submissions: tasks.map((t) =>
               this.need<Submission>("flow_submissions", t.latestSubmissionId!),
             ),
@@ -5210,7 +5248,7 @@ export class ProjectFlowController {
             changes,
             meeting,
             instruction:
-              "在整合副本实际检查，不编辑源文件；不确定则 inconclusive。检查通过时请在同次回复的 report 汇报；remainingIssues 必须列出仍未处理的 advisoryFindings。根据本轮结果在 nextRoundRecommendation 提出下一轮建议，无调整用 as-planned 和按原计划，轻量调整只改未开工任务的目标、输入或标准，大的方向或范围变化用 replan，不能改变负责人、成员或任务范围。diff 是本轮开始时的版本与当前整合结果之间的对比，changes 是程序核对出的改动文件清单。这两项可以直接作为内容和修改范围的依据，不需要再要开工前的基线。用户验收在这次整合检查和汇报之后进行，不要因为“用户还没确认”判为未通过。阅读本轮未读会议消息，聊天不是修改授权。发现范围内需要修改的内容写入 findings，范围变化或用户问题留给汇报和决策。",
+              "在整合副本实际检查，不编辑源文件；不确定则 inconclusive。检查通过时请在同次回复的 report 汇报；remainingIssues 必须列出仍未处理的 advisoryFindings。根据本轮结果在 nextRoundRecommendation 提出下一轮建议，无调整用 as-planned 和按原计划，轻量调整只改未开工任务的目标、输入或标准，大的方向或范围变化用 replan，不能改变负责人、成员或任务范围。diff 是本轮开始时的版本与当前整合结果之间的对比，changes 是程序核对出的改动文件清单。这两项可以直接作为内容和修改范围的依据，不需要再要开工前的基线。taskScopeEvidence 是程序保存的各已提交任务的许可路径、实际改动和越界记录，可用于跨轮核对；不要将本轮 diff 误当作所有轮次的改动。用户验收在这次整合检查和汇报之后进行，不要因为“用户还没确认”判为未通过。阅读本轮未读会议消息，聊天不是修改授权。发现范围内需要修改的内容写入 findings，范围变化或用户问题留给汇报和决策。",
           },
         ),
         this.integratedReply(op, criteria, previous, round, tasks, meeting),
@@ -5242,7 +5280,7 @@ export class ProjectFlowController {
       Object.assign(integration, {
         ...reviewOutcome(result.payload, assessment),
         verificationComplete: result.payload.verificationComplete,
-        deferredUserCriteria: split.deferred,
+        deferredUserCriteria: assessment.deferredUserCriteria,
         previousFindingChecks: result.payload.previousFindingChecks,
         reportDraft: result.payload.report,
         draftMeetingIds: meeting.pendingUserMessages.map((m) => m.id),
@@ -5250,7 +5288,8 @@ export class ProjectFlowController {
       });
       const latest = this.need<Round>("flow_rounds", round.id);
       this.update("flow_rounds", latest, {
-        deferredUserCriteria: split.deferred,
+        deferredUserCriteria: assessment.deferredUserCriteria,
+        requiresUserAcceptance: round.requiresUserAcceptance || assessment.deferredUserCriteria.length > 0,
         meetingReadIds: [
           ...new Set([
             ...(latest.meetingReadIds ?? []),
@@ -5514,6 +5553,7 @@ export class ProjectFlowController {
       this.update("flow_operations", op, { state: "done" });
       const saved = this.update("flow_integrations", integration, {
         peerReview,
+        deferredUserCriteria: [...new Set([...integration.deferredUserCriteria ?? [], ...assessment.deferredUserCriteria])],
       });
       if (assessment.outcome === "inconclusive") {
         this.update("flow_integrations", saved, { status: "blocked" });
@@ -5613,6 +5653,7 @@ export class ProjectFlowController {
       throw new FlowError("STALE_VERSION", "汇报前整合版本已改变。");
     const meeting = roundMeetingMaterial(this.store, round),
       cached =
+        !round.manualAcceptance &&
         integration.reportDraft &&
         integration.checkRunId &&
         JSON.stringify(integration.draftMeetingIds) ===
@@ -5666,6 +5707,8 @@ export class ProjectFlowController {
                 criteria,
                 reviewLevel: integration.reviewLevel ?? "high",
                 manualAcceptance: round.manualAcceptance,
+                sourceRoundtables: await this.roundtableMaterials(flow),
+                taskReviews: tasks.map(t => ({key: t.key, reviewSkipped: t.reviewSkipped})),
                 checkOutcome: integration.outcome,
                 assessments: integration.assessments,
                 strengths: integration.strengths,
@@ -5678,7 +5721,7 @@ export class ProjectFlowController {
                 taskKeys: tasks.map((t) => t.key),
                 meeting,
                 instruction:
-                  "逐条处理 pendingUserMessages，只允许 noted、answered、in-scope-fix、scope-change、needs-user。问题和未满足的要求写入 remainingIssues，需要用户决定的写入 userDecisionNeeded。范围内确需修改时给出实际路径，后台会按配置安排修正及复核；不要自行改文件或扩大任务范围。",
+                  "manualAcceptance.ownerNote 是用户的直接反馈，引用为用户实测/反馈；明确已实测的项目不要再声称尚未实测，但不得把用户反馈说成 AI 验证。taskReviews 标明 configured 的任务须说明未单独复核。保留圆桌来源。逐条处理 pendingUserMessages，只允许 noted、answered、in-scope-fix、scope-change、needs-user。问题和未满足的要求写入 remainingIssues，需要用户决定的写入 userDecisionNeeded。范围内确需修改时给出实际路径，后台会按配置安排修正及复核；不要自行改文件或扩大任务范围。",
               },
             ),
             (raw) => this.validateMeetingReport(raw, meeting, tasks),
@@ -5960,13 +6003,14 @@ export class ProjectFlowController {
         !onStaged,
     );
     for (const finding of issues) {
+      const references = [...(finding.location + " " + finding.request).matchAll(/[\w@.-]+(?:[\/][\w@.-]+)*\.[a-zA-Z][a-zA-Z0-9]{0,9}\b/g)].map(m => m[0]);
       const location = finding.location.split(/[:：\n]/)[0].trim(),
         owners = members.filter(
           (t) =>
             t.kind === "implementation" &&
             t.allowedPaths.some((p) => pathWithin(location, p)),
         );
-      if (owners.length !== 1) {
+      if (owners.length !== 1 || references.some(path => !owners[0].allowedPaths.some(scope => pathWithin(path, scope)))) {
         routable = false;
         break;
       }
@@ -6030,7 +6074,7 @@ export class ProjectFlowController {
                 ? "解决本轮整合冲突"
                 : "完成本轮范围内修正",
           inputs: [
-            reason,
+            group.issues.length && !userRequest ? "仅修正下面列出的实际问题，保留已通过的行为。" : reason,
             "完整问题清单：" + JSON.stringify(group.issues),
             ...members.map(
               (t) => "任务 " + t.key + " 提交 " + t.latestSubmissionId,
@@ -6121,6 +6165,16 @@ export class ProjectFlowController {
         .list<Round>("flow_rounds")
         .filter((r) => r.flowId === flow.id && r.planId === round.planId),
       next = rounds.find((r) => r.index === round.index + 1);
+    const completedRounds = rounds.slice().sort((a,b) => a.index-b.index).map(r => ({roundId:r.id,title:r.title,summary:r.report?.summary ?? "本轮已验收",deliverables:r.report?.deliverables ?? [],validationSummary:r.report?.validationSummary ?? ""}));
+    const completionReport = next ? undefined : {
+      generatedAt: at(),
+      summary: completedRounds.map(r => r.title + "：" + r.summary).join("\n\n"),
+      rounds: completedRounds,
+      corrections: this.tasks(flow.id).filter(t => t.kind === "integration-fix" || t.returnCount > 0).map(t => ({taskId:t.id,title:t.title,returns:t.returnCount,kind:t.kind})),
+      userReturns: rounds.flatMap(r => r.userChangeRequests ?? []),
+      roundtables: (await this.roundtableMaterials(flow)).map(m => m.sourceRoundtable),
+      remainingIssues: [...new Set(round.report?.remainingIssues ?? [])],
+    };
     if (next) await this.invalidateEarlyInputs(next, checkpoint);
     this.store.transaction(() => {
       this.update("flow_acceptances", acceptance, {
@@ -6174,7 +6228,7 @@ export class ProjectFlowController {
         currentRoundId: next?.id,
         ...(next || currentFlow.status === "cancelled"
           ? {}
-          : { status: "completed" as const }),
+          : { status: "completed" as const, completionReport }),
       });
     });
     await this.logs.afterAcceptance(round.projectId, round.id);
@@ -6232,6 +6286,7 @@ export class ProjectFlowController {
           "next-round",
           { mode: "as-planned", summary: "按原计划", taskAdjustments: [] },
           {
+            sourceRoundtables: await this.roundtableMaterials(flow),
             previousRound: previous,
             acceptedVersion: acceptance.version,
             acceptanceOpinion: acceptance.opinion,
@@ -6336,6 +6391,10 @@ export class ProjectFlowController {
       });
     });
   }
+  private async roundtableMaterials(flow: ProjectFlow) {
+    const messages = this.store.list<RoomMessage>("room_messages").filter(m => m.roomId === `project:${flow.projectId}` && m.author === "user" && m.status === "done" && m.roundtable?.kind === "material" && m.roundtable.conclusionId);
+    return messages.map(m => ({sourceRoundtable: {topicId: m.roundtable!.topicId, conclusionId: m.roundtable!.conclusionId!, messageId: m.id}, text: m.text}));
+  }
   private async startConfirmedRound(
     decision: Decision,
     p: Record<string, unknown>,
@@ -6374,22 +6433,24 @@ export class ProjectFlowController {
       choice === "按调整开始"
         ? validateNextRound(recommendation, tasks, this.store.profile().name)
         : undefined;
-    const patches =
-      adjustments?.taskAdjustments.map((a) => {
-        const task = tasks.find((t) => t.id === a.taskId)!;
-        return {
-          task,
-          patch: {
-            ...retainSupplementRequirements(
-              task,
-              a.goal ?? task.goal,
-              a.completionCriteria ?? task.completionCriteria,
-            ),
-            inputs: [...new Set([...task.inputs, ...(a.inputs ?? [])])],
-            requirementsRevision: requirementsRevision(task) + 1,
-          },
-        };
-      }) ?? [];
+    const opinion = text(p.opinion ?? "", true);
+    const sourceRoundtables = await this.roundtableMaterials(flow);
+    if ((opinion || sourceRoundtables.length) && tasks.some(task => !["pending", "ready", "cancelled"].includes(task.status)))
+      throw new FlowError("REPLAN_REQUIRED", "本轮已有提前开工的任务。请用要求修改方案处理新附言和圆桌材料，避免把已执行成果当成符合新要求。");
+    const patches = tasks.filter(task => ["pending", "ready"].includes(task.status)).map(task => {
+      const adjustment = adjustments?.taskAdjustments.find(a => a.taskId === task.id);
+      const supplements = opinion ? [...task.supplements ?? [], {
+        id: randomUUID(), requestId: decision.id, text: opinion, createdAt: at(), source: "task-card" as const,
+        requirementsRevision: requirementsRevision(task) + 1, status: "pending" as const, delivery: "next-turn" as const, requestedPaths: [],
+      }] : task.supplements;
+      const patch = {
+        ...retainSupplementRequirements({...task, supplements}, adjustment?.goal ?? task.goal, adjustment?.completionCriteria ?? task.completionCriteria),
+        supplements,
+        inputs: [...new Set([...task.inputs, ...adjustment?.inputs ?? [], ...(opinion ? ["用户补充：" + opinion] : []), ...sourceRoundtables.map(source => "已确认圆桌材料（不扩大修改范围）：" + JSON.stringify(source))])],
+        requirementsRevision: requirementsRevision(task) + (opinion || adjustment || sourceRoundtables.length ? 1 : 0),
+      };
+      return {task, patch};
+    });
     this.store.transaction(() => {
       for (const { task, patch } of patches)
         this.update("flow_tasks", task, patch);
@@ -6926,6 +6987,8 @@ export class ProjectFlowController {
             manualAcceptance: {
               decisionId: decision.id,
               reason: decision.reason,
+              ownerNote: text(p.opinion ?? "", true),
+              source: "user-tested",
             },
           });
         else if (decision.stage === "peer-review") {

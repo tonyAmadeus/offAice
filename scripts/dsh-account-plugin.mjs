@@ -70,9 +70,13 @@ export function apply(ctx, config) {
       }
       emit({type:'phase',phase:attempt?.phase||'waiting',code:attempt?.errorCode});
       if(view.status==='credential-stored'){
-        const profile=await ctx.deepseekAccount.getProfile(client);
-        emit({type:'status',authenticated:profile?.status==='ready',state:profile?.status==='ready'?'signed-in':'verification-failed'});
-        exit(profile?.status==='ready'?0:2);return;
+        // The grant is stored, so the sign-in itself succeeded. A first profile read that is slow
+        // or fails (new account, cold start, network) is not a failed login; only a grant that
+        // DeepSeek rejected, which the account service removes, is.
+        await Promise.race([ctx.deepseekAccount.getProfile(client).catch(()=>null),new Promise(resolve=>setTimeout(resolve,15000))]);
+        const stored=(await ctx.deepseekAccount.getState()).status==='credential-stored';
+        emit({type:'status',authenticated:stored,state:stored?'signed-in':'signed-out'});
+        exit(stored?0:2);return;
       }
       if(['cancelled','expired','failed'].includes(attempt?.phase)){exit(2);return;}
     }

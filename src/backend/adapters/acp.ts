@@ -18,7 +18,7 @@ import { acpPrompt } from './images';
 import { managedCatalogEnvironment } from '../executor-catalog';
 import { catalogEntry } from '../../shared/executor-catalog';
 import type {CatalogLoginState} from '../../shared/executor-catalog';
-import {officialExecutorLoginOutput,runOfficialExecutorLogin} from '../official-login';
+import {officialExecutorLoginOutput,runOfficialExecutorLogin,SLOW_LOGIN_PAGE} from '../official-login';
 import {defaultBrowserLoginCommand,defaultBrowserLoginEnvironment} from '../login-browser';
 import {prepareManagedConfig} from './managed-config';
 import {cursorClientRequest} from './cursor-acp';
@@ -245,8 +245,9 @@ export class AcpAdapter implements Adapter {
         if(login.viaAcp){
           // Cursor owns browser authorization in ACP. Its terminal login also waits
           // for optional account/telemetry work; do not chain two login lifecycles.
-          let acceptingProgress=true,preparationExpired=false;
-          const preparationTimer=setTimeout(()=>{preparationExpired=true;void this.cleanup().catch(()=>{});},30_000);
+          let acceptingProgress=true;
+          // A first start can outlast this hint; the authenticate deadline still ends the attempt.
+          const preparationTimer=setTimeout(()=>{if(acceptingProgress&&!this.stopped)progress?.(SLOW_LOGIN_PAGE);},30_000);
           try{
             await this.launch(this.environment(env),this.home(env),undefined,state=>{
               if(!acceptingProgress||this.stopped)return;
@@ -262,9 +263,6 @@ export class AcpAdapter implements Adapter {
             // Engine checks session creation asynchronously; a slow model-list
             // request must not keep the browser login button spinning.
             return {method:selected.label};
-          }catch(error){
-            if(preparationExpired)throw new Error('官方授权页面在 30 秒内未准备好，请检查网络后重试。');
-            throw error;
           }finally{acceptingProgress=false;clearTimeout(preparationTimer);}
         }
         const environment=this.environment(env),home=this.home(env),program=resolveAcpProgram(this.executor.command,environment);

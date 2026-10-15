@@ -2,7 +2,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {zcodeInput} from './zcode-input';
 import { latestPersona, nativeContextNeedsRefresh } from '../native-context';
-import { plainRoomSpeech } from './chat-policy';
+import { plainRoomSpeech, ROOM_READ_TOOLS, roomProjectFiles } from './chat-policy';
 import { zcodeRoomTools } from './zcode-chat';
 import {mkdir} from 'node:fs/promises';
 import type {ChildProcess} from 'node:child_process';
@@ -84,11 +84,13 @@ export class ZcodeAdapter implements Adapter{
     const base=this.environment(context.env),permissions=context.settings.permissions[this.executor.id]??this.executor.permissions??ACP_DEFAULT_PERMISSIONS;
     const command=this.command(base),env=this.modelEnvironment(base,command),account=zcodeAccount(this.executor.authentication),state=zcodeAccountState(env.ZCODE_DATA_BASE_DIR!,command.path,account,env);
     if(!state.ready)throw new Error(state.detail);
-    const roomTools=plainRoomSpeech(context)?await this.roomTools(command.path,hash=>{
+    // Project meeting rooms keep the read tools; plan mode and the denials below still forbid changes.
+    const roomFiles=roomProjectFiles(context);
+    const roomTools=plainRoomSpeech(context)?(await this.roomTools(command.path,hash=>{
       if(warnedRoomToolVersions.has(hash))return;
       context.emit('warning','新版 ZCode 的聊天室工具裁剪尚未核对，本轮未裁剪',undefined,'derived');
       warnedRoomToolVersions.add(hash);
-    }):[];
+    })).filter(tool=>!roomFiles||!ROOM_READ_TOOLS.includes(tool)):[];
     if(context.session.writeMode&&(permissions.commands!=='auto'||permissions.fileScope!=='any'||!permissions.network))throw new Error('ZCode 写入任务需要自动允许命令、任意文件范围和联网；当前权限下请关闭“允许修改”后进行只读对话。');
     const personaHash=createHash('sha256').update(context.persona??'').digest('hex');
     const remembered=context.session.nativeId&&context.session.nativePersona?.nativeId===context.session.nativeId&&context.session.nativePersona.hash===personaHash&&!nativeContextNeedsRefresh(context.session,text.length);

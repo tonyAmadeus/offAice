@@ -383,7 +383,7 @@ export function RoomView({ snapshot, invoke: rawInvoke, onOpenSession, split, fo
     {!project && !personal && <RoomBackdrop />}
     <div className="room-top">
     {project ? surface?.recordActions ? null : <div className="room-tool-row">
-      <span className="room-tool-title">{surface?.title??'会议聊天'}<small>{surface?.hint??'成员只说话，不改文件；正在工作的成员只回答 @ 点名'}</small></span>
+      <span className="room-tool-title">{surface?.title??'会议聊天'}<small>{surface?.hint??'成员可查看项目文件，但不改文件；正在工作的成员只回答 @ 点名'}</small></span>
       <button type="button" className="icon-button topic-more" aria-label="会议记录操作" aria-haspopup="menu" title="压缩、导出和清空会议记录" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setMenu({ x: rect.left, y: rect.bottom + 6, items: recordItems }); }}><MoreHorizontal size={16} /></button>
     </div> : <>
     <header className="room-head">
