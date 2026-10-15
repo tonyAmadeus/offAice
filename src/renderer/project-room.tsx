@@ -17,7 +17,7 @@ import { RESULT_READS } from '../shared/round-results';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, AppWindow, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, FileDiff, FolderOpen, Hand, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, LoaderCircle, Pause, Play, ScrollText, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
-import type { AllowedAction, Decision, FlowOperation, Integration, Plan, ProjectFlowSnapshot, Round, Task, TaskStatus, TaskSupplement } from '../shared/project-flow';
+import type { AllowedAction, Decision, FlowOperation, Integration, Plan, ProjectFlowSnapshot, Round, Task, TaskStatus, TaskSupplement, FlowCompletionReport } from '../shared/project-flow';
 import {FLOW_LIMITS,reviewLevel,roundLead,roundReviewLevel,REVIEW_LEVEL_LABELS,REVIEW_LEVEL_HINTS,QUOTA_STAGE_LABELS,type ReviewLevel,type DisputeRuling} from '../shared/project-flow';
 import type { Project, RoomId, RoomMessage, Snapshot } from '../shared/types';
 import {commandExitCodeNotes} from '../shared/project-flow-review';
@@ -149,6 +149,7 @@ export function ProjectRoom({ snapshot, project, invoke, onOpenSession,onRoundta
       : <div className="dock-row"><Sparkles size={15} /><p>{flow && !live ? '上一段工作已经结束。' : ''}先在聊天里和大家说说这次要做什么、有什么要求。讨论清楚了，再选一位负责人起草方案；<strong>你确认方案后才开工</strong>。</p></div>)
     : <>
       {!live && <div className="dock-row"><CheckCircle2 size={15} /><p>{flow!.status === 'completed' ? '这段工作已经完成，成品已写回项目。' : '这段工作已取消，记录和成果都保留着。'}</p><button type="button" className="button small primary" disabled={busy} onClick={() => setStarting(true)}><Sparkles size={13} />开始新的一段工作</button></div>}
+      {!live && flow!.completionReport && <CompletionReport report={flow!.completionReport} />}
       {live && flow!.status === 'planning' && !plan && (planOp || flow!.dispatchMode !== 'running'
         ? <div className="dock-row"><AlertTriangle size={15} /><p><strong>方案起草已停止。</strong>{planOp ? '在下面的提示里放弃这次起草，再点右上角“继续”，负责人会重新起草。' : '点右上角“继续”，负责人会接着起草。'}</p></div>
         : <div className="dock-row"><LoaderCircle size={15} className="spin" /><p><MemberName id={flow!.leadMemberId} /> 正在根据讨论起草方案…</p></div>)}
@@ -427,7 +428,7 @@ function DecisionCard({ decision, tasks, rounds,busy, onAnswer }: { decision: De
   const early = decision.kind === 'early-start';
   return <section className="meeting-card decision-card" aria-label={`决策：${decision.title}`}>
     <div className="decision-card-head"><Hand size={15} /><strong>{decision.title}</strong></div>
-    <p>{decision.reason}</p>
+    <p className="decision-reason">{plainFlowError(decision.reason)}</p>
     {decision.kind==='next-round'&&<div className="next-round-adjustments"><small>沿用现有负责人和分工。较大的方向或范围变化，请选“要求修改方案”。</small>{recommendation?.taskAdjustments.map(a=><div key={a.taskId}><strong>{tasks.find(t=>t.id===a.taskId)?.title}</strong>{a.goal&&<p>目标：{a.goal}</p>}{a.inputs?.length&&<p>补充输入：{joinClauses(a.inputs,'；')}</p>}{a.completionCriteria&&<ul>{a.completionCriteria.map(c=><li key={criterionText(c)}>核对标准：{criterionText(c)}</li>)}</ul>}</div>)}{recommendation?.completionCriteria&&<ul>{recommendation.completionCriteria.map(c=><li key={criterionText(c)}>整轮标准：{criterionText(c)}</li>)}</ul>}</div>}
     {decision.kind==='review-dispute'&&<div className="review-disputes"><small>每项任务最多返还 {FLOW_LIMITS.disputeReturnWaivers} 次退回次数；超过后仍可裁定，退回正常计数。你可统一裁定，也可逐条选择。</small>{disputes.map(({finding,reason})=><div key={finding.id}><strong>{finding.location} · {finding.request}</strong><p>复核依据：{finding.evidence}</p><p>作者异议：{reason}</p><label>逐条裁定<select aria-label={`裁定「${finding.request}」`} value={rulings[finding.id]??''} disabled={busy} onChange={e=>setRulings({...rulings,[finding.id]:e.target.value as DisputeRuling['verdict']})}><option value="">请选择…</option><option value="uphold-author">支持作者</option><option value="uphold-review">维持复核</option></select></label></div>)}</div>}
     {decision.kind==='replan'&&<small>{decision.stage==='integration-fix'?'仅替换本轮负责人，重做卡住的整合事项；后续轮次仍由原负责人负责。':'仅重做这项任务，保留其他成员已通过的成果。'}人工指定后只重做一次，历史修正次数不清零。</small>}
@@ -532,6 +533,15 @@ function TaskDetail({ invoke, task, tasks, data, snapshot, members, busy, blocke
   </article>;
 }
 
+/** The whole piece of work at a glance once its last round is accepted: every round, the fixes it took, and what remains. */
+function CompletionReport({ report }: { report: FlowCompletionReport }) {
+  const fixes = report.corrections.length, returns = report.userReturns.length;
+  return <details className="completion-report"><summary>整段工作总结 · {report.rounds.length} 轮{fixes ? ` · ${fixes} 次修正` : ''}{returns ? ` · 你驳回 ${returns} 次` : ''}{report.roundtables.length ? ` · 引用圆桌 ${report.roundtables.length} 次` : ''}</summary>
+    <ol>{report.rounds.map(round => <li key={round.roundId}><strong>{round.title}</strong><Markdown text={readableContent(round.summary)} />{round.deliverables.length > 0 && <p className="task-meta">成果：{joinClauses(round.deliverables, '、')}</p>}</li>)}</ol>
+    {fixes > 0 && <p className="task-meta">修正：{report.corrections.map(item => item.title).join('；')}</p>}
+    {report.remainingIssues.length > 0 && <div className="completion-remaining"><strong>遗留</strong><ul>{report.remainingIssues.map(item => <li key={item}>{item}</li>)}</ul></div>}
+  </details>;
+}
 const SUPPLEMENT_STATUS: Record<TaskSupplement['status'], string> = { pending: '等待送达', delivering: '正在送达', delivered: '已送达，成员正在处理', submitted: '已随提交交回', applied: '已纳入', unknown: '是否送达待核对', awaiting_scope: '超出范围，等你决定', dismissed: '已撤回', replanned: '已转入新方案' };
 /** Each extra requirement shows where it stands: sent, taken into the work, or waiting on the owner. */
 export function SupplementReceipts({ task }: { task: Task }) {

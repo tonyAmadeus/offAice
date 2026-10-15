@@ -1285,6 +1285,7 @@ export class ProjectFlowController {
         ...result.payload,
         sourceJointReviewId: flow.sourceJointReviewId,
         sourceRoundtable: flow.sourceRoundtable,
+        roundtableMessageIds: sourceRoundtables.map(m => m.sourceRoundtable.messageId),
         version: (parent?.version ?? 0) + 1,
         parentPlanId: parent?.id,
         proposedByRunId: result.runId,
@@ -6286,7 +6287,7 @@ export class ProjectFlowController {
           "next-round",
           { mode: "as-planned", summary: "按原计划", taskAdjustments: [] },
           {
-            sourceRoundtables: await this.roundtableMaterials(flow),
+            sourceRoundtables: await this.roundtableMaterials(flow, true),
             previousRound: previous,
             acceptedVersion: acceptance.version,
             acceptanceOpinion: acceptance.opinion,
@@ -6391,8 +6392,12 @@ export class ProjectFlowController {
       });
     });
   }
-  private async roundtableMaterials(flow: ProjectFlow) {
-    const messages = this.store.list<RoomMessage>("room_messages").filter(m => m.roomId === `project:${flow.projectId}` && m.author === "user" && m.status === "done" && m.roundtable?.kind === "material" && m.roundtable.conclusionId);
+  /** Roundtable conclusions brought back to the project room for this piece of work. Material brought back before an
+   * earlier piece ended belongs to that work. fresh: only material no plan or started round of this flow has taken in. */
+  private async roundtableMaterials(flow: ProjectFlow, fresh = false) {
+    const since = this.store.list<ProjectFlow>("project_flows").filter(f => f.projectId === flow.projectId && f.id !== flow.id && f.createdAt < flow.createdAt && ["completed", "cancelled"].includes(f.status)).map(f => f.updatedAt).sort().at(-1) ?? "";
+    const used = fresh ? new Set([...this.store.list<Plan>("flow_plans").filter(p => p.flowId === flow.id), ...this.store.list<Round>("flow_rounds").filter(r => r.flowId === flow.id)].flatMap(r => r.roundtableMessageIds ?? [])) : new Set<string>();
+    const messages = this.store.list<RoomMessage>("room_messages").filter(m => m.roomId === `project:${flow.projectId}` && m.author === "user" && m.status === "done" && m.roundtable?.kind === "material" && m.roundtable.conclusionId && m.at > since && !used.has(m.id));
     return messages.map(m => ({sourceRoundtable: {topicId: m.roundtable!.topicId, conclusionId: m.roundtable!.conclusionId!, messageId: m.id}, text: m.text}));
   }
   private async startConfirmedRound(
@@ -6434,7 +6439,7 @@ export class ProjectFlowController {
         ? validateNextRound(recommendation, tasks, this.store.profile().name)
         : undefined;
     const opinion = text(p.opinion ?? "", true);
-    const sourceRoundtables = await this.roundtableMaterials(flow);
+    const sourceRoundtables = await this.roundtableMaterials(flow, true);
     if ((opinion || sourceRoundtables.length) && tasks.some(task => !["pending", "ready", "cancelled"].includes(task.status)))
       throw new FlowError("REPLAN_REQUIRED", "本轮已有提前开工的任务。请用要求修改方案处理新附言和圆桌材料，避免把已执行成果当成符合新要求。");
     const patches = tasks.filter(task => ["pending", "ready"].includes(task.status)).map(task => {
@@ -6461,6 +6466,7 @@ export class ProjectFlowController {
           ? { completionCriteria: adjustments.completionCriteria }
           : {}),
         nextConfirmation: { ...confirmation, status: "confirmed", choice },
+        ...(sourceRoundtables.length ? { roundtableMessageIds: sourceRoundtables.map(m => m.sourceRoundtable.messageId) } : {}),
       });
     });
   }

@@ -49,6 +49,9 @@ export interface ProjectFlow {writeBoundary?:import('./types').WriteBoundary}
 export interface Plan extends FlowRecord, PlanPayload { version:number; parentPlanId?:string; proposedByRunId?:string; status:'draft'|'awaiting_confirmation'|'confirmed'|'superseded'|'rejected'; notes:string[]; confirmedAt?:string; allowedActions?:AllowedAction[] }
 export interface Plan {sourceJointReviewId?:string}
 export interface Plan {sourceRoundtable?:ProjectFlow['sourceRoundtable']}
+/** Roundtable material messages a plan or a started round took in, so later rounds receive only new material. */
+export interface Plan {roundtableMessageIds?:string[]}
+export interface Round {roundtableMessageIds?:string[]}
 export type PlanSummary = Pick<Plan,'id'|'projectId'|'flowId'|'revision'|'version'|'parentPlanId'|'status'|'objective'|'scope'|'deliverables'|'createdAt'|'updatedAt'> & {roundCount:number;taskCount:number};
 export interface RoundReport { summary:string; completedTaskKeys:string[]; deliverables:string[]; validationSummary:string; remainingIssues:string[]; nextRoundSummary:string; userDecisionNeeded:string }
 export interface MeetingResponse {messageId:string;disposition:'noted'|'answered'|'in-scope-fix'|'scope-change'|'needs-user';summary:string;paths:string[];fixTaskId?:string;resolvedAt?:string}

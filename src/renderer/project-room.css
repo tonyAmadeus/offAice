@@ -404,3 +404,9 @@
 .supplement-receipts li span { display: block; color: var(--ink); }
 .supplement-receipts small { color: var(--ink-3); }
 .supplement-receipts .supplement-unknown, .supplement-receipts .supplement-awaiting_scope { color: var(--warn); }
+.completion-report { margin: 6px 0 2px; padding: 8px 10px; border-radius: var(--r-md); background: var(--sunken); font-size: var(--fs-sm); }
+.completion-report summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
+.completion-report ol { margin: 6px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.completion-remaining ul { margin: 2px 0 0; padding-left: 18px; }
+/* Program reasons may list items on separate lines. */
+.meeting-alert p, .task-meta.bad, .decision-reason, .progress-flow-summary { white-space: pre-line; }
