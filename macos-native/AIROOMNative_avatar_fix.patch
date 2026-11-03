@@ -1,0 +1,213 @@
+diff --git a/AVATAR_FIX.md b/AVATAR_FIX.md
+new file mode 100644
+index 0000000..0cefffe
+--- /dev/null
++++ b/AVATAR_FIX.md
+@@ -0,0 +1,8 @@
++# Avatar/Portrait crop fix
++
++- `StudioAvatar` no longer makes a tall 960×1720 portrait into a square, then applies a hard-coded downward offset.
++- `PortraitCropLayout` scales the original artwork proportionately and puts the upstream face coordinate at the exact centre of the circular frame.
++- Original `BUILTIN_ART` values from `src/renderer/members.tsx`: Claude `(x=0.5,y=0.123,zoom=3.6)` and Codex `(x=0.487,y=0.113,zoom=3.6)`.
++- Applies to all callers of `StudioAvatar`: sidebar, member cards, chats, lounge, roundtable and quota page. Full-body `StudioPortrait` display is unchanged.
++- Four Linux-capable layout regression tests verify the crop and protect against a return to distortion or hard-coded offsets.
++- Test the real rendering on macOS: SwiftUI / AppKit are not available in this Linux build environment.
+diff --git a/macos/Sources/AIROOMCore/PortraitFraming.swift b/macos/Sources/AIROOMCore/PortraitFraming.swift
+new file mode 100644
+index 0000000..921f241
+--- /dev/null
++++ b/macos/Sources/AIROOMCore/PortraitFraming.swift
+@@ -0,0 +1,60 @@
++import Foundation
++
++/// Normalized face anchor and source-width magnification used by the original AIROOM UI.
++/// Values describe the artwork, not a fixed pixel displacement, so small sidebar avatars
++/// and larger member cards use the same crop without stretching a portrait into a square.
++public struct PortraitFaceAnchor: Equatable, Sendable {
++    public let x: Double
++    public let y: Double
++    public let zoom: Double
++
++    public init(x: Double, y: Double, zoom: Double) {
++        self.x = x
++        self.y = y
++        self.zoom = zoom
++    }
++}
++
++public extension AgentKind {
++    /// Source: offAice/src/renderer/members.tsx, BUILTIN_ART (pinned upstream artwork).
++    var portraitFaceAnchor: PortraitFaceAnchor {
++        switch self {
++        case .claude: return PortraitFaceAnchor(x: 0.500, y: 0.123, zoom: 3.6)
++        case .codex: return PortraitFaceAnchor(x: 0.487, y: 0.113, zoom: 3.6)
++        }
++    }
++}
++
++/// Geometry for placing the original, undistorted portrait behind a circular clipping mask.
++/// The selected point in the source image lands exactly at the circle's center.
++public struct PortraitCropLayout: Equatable, Sendable {
++    public let imageWidth: Double
++    public let imageHeight: Double
++    public let centerX: Double
++    public let centerY: Double
++
++    public var originX: Double { centerX - imageWidth / 2 }
++    public var originY: Double { centerY - imageHeight / 2 }
++
++    public static func make(
++        diameter: Double,
++        sourceWidth: Double,
++        sourceHeight: Double,
++        anchor: PortraitFaceAnchor
++    ) -> PortraitCropLayout? {
++        guard diameter.isFinite, diameter > 0,
++              sourceWidth.isFinite, sourceWidth > 0,
++              sourceHeight.isFinite, sourceHeight > 0,
++              anchor.x.isFinite, (0...1).contains(anchor.x),
++              anchor.y.isFinite, (0...1).contains(anchor.y),
++              anchor.zoom.isFinite, anchor.zoom >= 1 else { return nil }
++
++        let width = diameter * anchor.zoom
++        let height = width * sourceHeight / sourceWidth
++        guard height.isFinite, height > 0 else { return nil }
++        let centerX = diameter / 2 + (0.5 - anchor.x) * width
++        let centerY = diameter / 2 + (0.5 - anchor.y) * height
++        return PortraitCropLayout(imageWidth: width, imageHeight: height,
++                                  centerX: centerX, centerY: centerY)
++    }
++}
+diff --git a/macos/Sources/AIROOMNative/StudioDesign.swift b/macos/Sources/AIROOMNative/StudioDesign.swift
+index a8c4747..8ff58b3 100644
+--- a/macos/Sources/AIROOMNative/StudioDesign.swift
++++ b/macos/Sources/AIROOMNative/StudioDesign.swift
+@@ -73,6 +73,40 @@ struct StudioBrandMark: View {
+     }
+ }
+ 
++/// Face crop shared by the sidebar, member card, chat bubbles and room participants.
++/// Original artwork is a tall portrait. The face is NOT at the image centre;
++/// preserve its aspect ratio and align the original artwork's measured face anchor.
++private struct StudioFaceArtwork: View {
++    let agent: AgentKind
++    let size: CGFloat
++
++    var body: some View {
++        GeometryReader { geometry in
++            if let artwork = StudioAsset.image(StudioAsset.portrait(for: agent)),
++               let crop = PortraitCropLayout.make(
++                   diameter: Double(geometry.size.width),
++                   sourceWidth: Double(artwork.size.width),
++                   sourceHeight: Double(artwork.size.height),
++                   anchor: agent.portraitFaceAnchor
++               ) {
++                Image(nsImage: artwork)
++                    .resizable()
++                    .interpolation(.high)
++                    .frame(width: CGFloat(crop.imageWidth), height: CGFloat(crop.imageHeight))
++                    .position(x: CGFloat(crop.centerX), y: CGFloat(crop.centerY))
++            } else {
++                Image(systemName: agent == .claude ? "sparkle" : "curlybraces")
++                    .font(.system(size: geometry.size.width * 0.42, weight: .semibold))
++                    .foregroundStyle(agent.studioColor)
++                    .frame(width: geometry.size.width, height: geometry.size.height)
++            }
++        }
++        .frame(width: size, height: size)
++        .clipShape(Circle())
++        .accessibilityHidden(true)
++    }
++}
++
+ struct StudioAvatar: View {
+     let agent: AgentKind
+     var size: CGFloat = 40
+@@ -82,18 +116,7 @@ struct StudioAvatar: View {
+             Circle().fill(agent.studioColor.opacity(0.15))
+                 .overlay(Circle().strokeBorder(agent.studioColor.opacity(0.34), lineWidth: 1.4))
+                 .overlay {
+-                    Group {
+-                        if let artwork = StudioAsset.image(StudioAsset.portrait(for: agent)) {
+-                            Image(nsImage: artwork).resizable().scaledToFill()
+-                                .frame(width: size * 2.4, height: size * 2.4)
+-                                .offset(y: size * 0.44)
+-                        } else {
+-                            Image(systemName: agent == .claude ? "sparkle" : "curlybraces")
+-                                .font(.system(size: size * 0.42, weight: .semibold))
+-                                .foregroundStyle(agent.studioColor)
+-                        }
+-                    }
+-                    .frame(width: size, height: size).clipShape(Circle())
++                    StudioFaceArtwork(agent: agent, size: size)
+                 }
+             Circle()
+                 .fill(running ? StudioTheme.amber : StudioTheme.moss)
+@@ -101,6 +124,7 @@ struct StudioAvatar: View {
+                 .overlay(Circle().strokeBorder(.background, lineWidth: 2))
+         }
+         .frame(width: size, height: size)
++        .accessibilityLabel(agent.shortName)
+     }
+ }
+ 
+diff --git a/macos/Tests/AIROOMCoreTests/PortraitFramingTests.swift b/macos/Tests/AIROOMCoreTests/PortraitFramingTests.swift
+new file mode 100644
+index 0000000..88b63dd
+--- /dev/null
++++ b/macos/Tests/AIROOMCoreTests/PortraitFramingTests.swift
+@@ -0,0 +1,54 @@
++import XCTest
++@testable import AIROOMCore
++
++final class PortraitFramingTests: XCTestCase {
++    // Both source portraits use a 960 × 1720 canvas.
++    private let portraitWidth = 960.0
++    private let portraitHeight = 1720.0
++
++    func testFaceAnchorCenteredForBothAgentsAcrossAvatarSizes() throws {
++        for agent in AgentKind.allCases {
++            for diameter in [26.0, 33.0, 42.0, 66.0, 128.0] {
++                let anchor = agent.portraitFaceAnchor
++                let crop = try XCTUnwrap(PortraitCropLayout.make(
++                    diameter: diameter, sourceWidth: portraitWidth,
++                    sourceHeight: portraitHeight, anchor: anchor))
++                let alignedFaceX = crop.originX + anchor.x * crop.imageWidth
++                let alignedFaceY = crop.originY + anchor.y * crop.imageHeight
++                XCTAssertEqual(alignedFaceX, diameter / 2, accuracy: 0.000001)
++                XCTAssertEqual(alignedFaceY, diameter / 2, accuracy: 0.000001)
++                XCTAssertEqual(crop.imageHeight / crop.imageWidth,
++                               portraitHeight / portraitWidth, accuracy: 0.000001,
++                               "The portrait must not be distorted into a square.")
++            }
++        }
++    }
++
++    func testSourceAnchorsMatchOriginalUI() {
++        XCTAssertEqual(AgentKind.claude.portraitFaceAnchor,
++                       PortraitFaceAnchor(x: 0.500, y: 0.123, zoom: 3.6))
++        XCTAssertEqual(AgentKind.codex.portraitFaceAnchor,
++                       PortraitFaceAnchor(x: 0.487, y: 0.113, zoom: 3.6))
++    }
++
++    func testRejectInvalidDimensionsAndCoordinates() {
++        let anchor = AgentKind.claude.portraitFaceAnchor
++        XCTAssertNil(PortraitCropLayout.make(diameter: 0, sourceWidth: 960,
++                                             sourceHeight: 1720, anchor: anchor))
++        XCTAssertNil(PortraitCropLayout.make(diameter: 40, sourceWidth: 0,
++                                             sourceHeight: 1720, anchor: anchor))
++        XCTAssertNil(PortraitCropLayout.make(diameter: 40, sourceWidth: 960,
++                                             sourceHeight: .infinity, anchor: anchor))
++        XCTAssertNil(PortraitCropLayout.make(diameter: 40, sourceWidth: 960,
++                                             sourceHeight: 1720,
++                                             anchor: PortraitFaceAnchor(x: 1.5, y: 0.2, zoom: 3.6)))
++    }
++
++    func testCodexFaceIsSlightlyRightOfCenterInSource() throws {
++        let anchor = AgentKind.codex.portraitFaceAnchor
++        let crop = try XCTUnwrap(PortraitCropLayout.make(diameter: 40,
++                sourceWidth: portraitWidth, sourceHeight: portraitHeight, anchor: anchor))
++        XCTAssertGreaterThan(crop.centerX, 20) // source focus x=0.487
++        XCTAssertLessThan(crop.originY, 0) // face is close to top of original artwork
++    }
++}

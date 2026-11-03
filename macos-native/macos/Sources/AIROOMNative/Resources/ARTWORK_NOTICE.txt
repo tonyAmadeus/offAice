@@ -1,0 +1,4 @@
+Original AIROOM artwork is not bundled in this source distribution.
+Run ./Scripts/fetch-original-assets.sh to fetch individual files from the pinned
+upstream Git commit, verifying their Git blob hashes before building.
+Artwork may have separate copyright terms; obtain permission before redistribution.

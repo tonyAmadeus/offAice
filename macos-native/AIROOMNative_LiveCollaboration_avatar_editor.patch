@@ -1,0 +1,461 @@
+diff --git a/AVATAR_EDITOR.md b/AVATAR_EDITOR.md
+new file mode 100644
+index 0000000..015221c
+--- /dev/null
++++ b/AVATAR_EDITOR.md
+@@ -0,0 +1,19 @@
++# AIROOM Native — 內建頭像裁切編輯器
++
++## 如何使用
++
++1. 開啟 AIROOM，從左側選擇 **管理人物卡**。
++2. 選擇 Claude 或 Codex，按 **調整頭像**。
++3. 直接拖曳圓形預覽中的人物，調整頭部位置；也可以透過 **縮放、水平位置、垂直位置**滑桿微調。
++4. 使用 46px 與 88px 即時預覽確認效果，按 **儲存** 才會套用。若要放棄請按 **取消**；按 **恢復預設位置** 然後儲存可回到原始裁切值。
++
++- 新設定存在每一張 `MemberCard.avatarCrop` 內，跟其他設定一起使用現有 Keychain 金鑰加密；原始 WebP 不會修改，也不需要重新編譯。
++- 側邊欄、人物卡、聊天室、茶歇室、圓桌和額度頁的圓形頭像都共用同一個設定。**全身立繪**仍保留原始顯示方式，不會被裁切。
++- 舊的 `state.aesgcm` 不含 `avatarCrop` 時自動回退原版臉部位置，沒有資料遷移或帳號變更。
++- 圖片不存在時編輯器不允許儲存假裁切；使用 `macos/Scripts/package-app.sh` 自動從原始 repo 的固定 Commit 下載並校驗素材，再開啟程式。
++
++## 驗證
++
++- `swift test`：74/74 項 Foundation 核心測試通過，新增 5 項裁切編輯、舊版資料相容及幾何安全測試。
++- `swiftc -frontend -parse`：SwiftUI 與 Core 原始碼皆通過語法解析。
++- 這個環境不是 macOS，因此 **無法執行 SwiftUI 型別檢查、簽章、打包或視覺實測**。請在 Apple Silicon Mac 執行 `./Scripts/package-app.sh` 並確認裁切與儲存後重新開啟仍有效。
+diff --git a/START_HERE.md b/START_HERE.md
+index 91cb455..0f3abf3 100644
+--- a/START_HERE.md
++++ b/START_HERE.md
+@@ -16,6 +16,10 @@ open dist/AIROOMNative.app
+ 
+ 封裝腳本會檢查原版圖片；缺少時從固定上游 Commit 下載並驗證，必要時會使用網路。產生的 `.app` 為本機開發用途臨時簽章，未經 Apple 公證。請先驗證新版讀取原有資料正確，再將 App 取代 `/Applications` 的舊版；**不要刪除 Application Support 或 Keychain**。
+ 
++## 新增：人物卡裁切編輯器
++
++在「管理人物卡」選擇人物 →「調整頭像」，即可拖曳、縮放、預覽並儲存；不會修改原版立繪。詳見 `AVATAR_EDITOR.md`。
++
+ ## 新功能入口
+ 
+ - **茶歇室 →「雙 AI 同台直播模式」**：選兩位在場成員，輸入主題，設定發言間隔、輪數、時長；按「開始雙 AI 同台直播」。過程中可插入觀眾暱稱和留言，下一輪 AI 會讀到；按「停止直播」終止當前程序。
+diff --git a/macos/README.md b/macos/README.md
+index 9b65201..fa4fd64 100644
+--- a/macos/README.md
++++ b/macos/README.md
+@@ -10,7 +10,7 @@
+ - **Apple Silicon arm64 專用**：macOS 14+，本機打包時使用 `lipo` 檢查執行檔；不需 Rosetta 來執行 App 本體。請另外核對官方 CLI 及其子程序架構。
+ - **繁體中文／英文介面**：設定 →「介面語言」可即時切換，選擇儲存在加密的 `state.aesgcm`，舊設定自動使用繁體中文。
+ - **Claude Code / Codex App Server**：Claude 優先使用 Claude Desktop 的 Code 分頁安裝的內附 CLI，Codex 則透過官方 `codex app-server` JSON-RPC，優先使用 ChatGPT.app 內附執行檔；唯讀單人聊天、串流回覆、手動停止、近況重建。
+-- **成員卡與原版 UI 風格**：暖色紙張與燈光配色、工作室首頁、人物展示、專案導覽、茶歇室背景、外觀明暗切換；自訂顯示名稱、角色設定、啟用狀態。原版圖片可透過 `Scripts/fetch-original-assets.sh` 從鎖定的 Git Commit 下載並驗證（不包含於本 ZIP）。
++- **成員卡與原版 UI 風格**：暖色紙張與燈光配色、工作室首頁、人物展示、專案導覽、茶歇室背景、外觀明暗切換；自訂顯示名稱、角色設定、啟用狀態；在「管理人物卡」可透過「調整頭像」直接拖曳及縮放，裁切設定加密保存。原版圖片可透過 `Scripts/fetch-original-assets.sh` 從鎖定的 Git Commit 下載並驗證（不包含於本 ZIP）。
+ - **多 AI 共用上下文對話室**：Claude/Codex 接收同一份持久化、具角色標記的對話歷史；只有已完成的回覆能進入下一位的上下文。支援單一／所有成員回覆、獨立話題房間、較早紀錄截斷提示及中斷恢復。詳見 `SHARED_CONTEXT.md`。
+ - **獨立圓桌**：Claude 與 Codex 分別回答相同問題，保存歷史比較。
+ - **專案工作區**：建立原始資料夾的工作副本，由 Codex 在副本中修改，列出新增、修改、刪除與文字預覽；**使用者明確批准**後才做衝突檢查並寫回。可額外請 Claude 進行唯讀審查。
+diff --git a/macos/Sources/AIROOMCore/Collaboration.swift b/macos/Sources/AIROOMCore/Collaboration.swift
+index 6a3cb72..bd1f4ab 100644
+--- a/macos/Sources/AIROOMCore/Collaboration.swift
++++ b/macos/Sources/AIROOMCore/Collaboration.swift
+@@ -7,13 +7,35 @@ public struct MemberCard: Identifiable, Codable, Equatable, Sendable {
+     public var name: String
+     public var persona: String
+     public var enabled: Bool
+-    public init(id: UUID = UUID(), agent: AgentKind, name: String? = nil, persona: String = "", enabled: Bool = true) {
++    /// Optional per-person face framing. Nil preserves the pinned original defaults.
++    public var avatarCrop: PortraitFaceAnchor?
++
++    public init(id: UUID = UUID(), agent: AgentKind, name: String? = nil,
++                persona: String = "", enabled: Bool = true,
++                avatarCrop: PortraitFaceAnchor? = nil) {
+         self.id = id
+         self.agent = agent
+         self.name = name ?? agent.rawValue
+         self.persona = persona
+         self.enabled = enabled
++        self.avatarCrop = avatarCrop
++    }
++
++    private enum CodingKeys: String, CodingKey {
++        case id, agent, name, persona, enabled, avatarCrop
++    }
++
++    /// Old encrypted state files do not have avatarCrop; retain default framing.
++    public init(from decoder: Decoder) throws {
++        let values = try decoder.container(keyedBy: CodingKeys.self)
++        id = try values.decode(UUID.self, forKey: .id)
++        agent = try values.decode(AgentKind.self, forKey: .agent)
++        name = try values.decode(String.self, forKey: .name)
++        persona = try values.decode(String.self, forKey: .persona)
++        enabled = try values.decode(Bool.self, forKey: .enabled)
++        avatarCrop = try values.decodeIfPresent(PortraitFaceAnchor.self, forKey: .avatarCrop)
+     }
++
+     public static var defaults: [MemberCard] { AgentKind.allCases.map { MemberCard(agent: $0) } }
+ }
+ 
+diff --git a/macos/Sources/AIROOMCore/PortraitFraming.swift b/macos/Sources/AIROOMCore/PortraitFraming.swift
+index 921f241..d9886ae 100644
+--- a/macos/Sources/AIROOMCore/PortraitFraming.swift
++++ b/macos/Sources/AIROOMCore/PortraitFraming.swift
+@@ -3,7 +3,7 @@ import Foundation
+ /// Normalized face anchor and source-width magnification used by the original AIROOM UI.
+ /// Values describe the artwork, not a fixed pixel displacement, so small sidebar avatars
+ /// and larger member cards use the same crop without stretching a portrait into a square.
+-public struct PortraitFaceAnchor: Equatable, Sendable {
++public struct PortraitFaceAnchor: Codable, Equatable, Sendable {
+     public let x: Double
+     public let y: Double
+     public let zoom: Double
+@@ -15,6 +15,48 @@ public struct PortraitFaceAnchor: Equatable, Sendable {
+     }
+ }
+ 
++
++public extension PortraitFaceAnchor {
++    /// Ensure a crop always fills the full circular viewport and uses reasonable
++    /// magnification. Coordinates remain normalized to the ORIGINAL artwork.
++    func constrained(sourceWidth: Double, sourceHeight: Double,
++                     zoomRange: ClosedRange<Double> = 2.5...7.0) -> PortraitFaceAnchor {
++        guard sourceWidth.isFinite, sourceWidth > 0,
++              sourceHeight.isFinite, sourceHeight > 0,
++              x.isFinite, y.isFinite, zoom.isFinite else { return self }
++        let zoomValue = min(max(zoom, zoomRange.lowerBound), zoomRange.upperBound)
++        let xMargin = 0.5 / zoomValue
++        let heightRatio = sourceHeight / sourceWidth
++        let yMargin = 0.5 / (zoomValue * heightRatio)
++        guard yMargin.isFinite, yMargin <= 0.5 else { return self }
++        return PortraitFaceAnchor(
++            x: min(max(x, xMargin), 1 - xMargin),
++            y: min(max(y, yMargin), 1 - yMargin),
++            zoom: zoomValue
++        )
++    }
++
++    /// The user drags the ART in screen pixels, whereas x/y encode the face
++    /// focus in original-image coordinates. Dragging right decreases x.
++    func translated(dragX: Double, dragY: Double, diameter: Double,
++                    sourceWidth: Double, sourceHeight: Double) -> PortraitFaceAnchor {
++        guard diameter.isFinite, diameter > 0,
++              dragX.isFinite, dragY.isFinite,
++              sourceWidth.isFinite, sourceWidth > 0,
++              sourceHeight.isFinite, sourceHeight > 0,
++              zoom.isFinite, zoom > 0 else { return self }
++        let displayedWidth = diameter * zoom
++        let displayedHeight = displayedWidth * sourceHeight / sourceWidth
++        guard displayedWidth.isFinite, displayedHeight.isFinite,
++              displayedHeight > 0 else { return self }
++        return PortraitFaceAnchor(
++            x: x - dragX / displayedWidth,
++            y: y - dragY / displayedHeight,
++            zoom: zoom
++        ).constrained(sourceWidth: sourceWidth, sourceHeight: sourceHeight)
++    }
++}
++
+ public extension AgentKind {
+     /// Source: offAice/src/renderer/members.tsx, BUILTIN_ART (pinned upstream artwork).
+     var portraitFaceAnchor: PortraitFaceAnchor {
+diff --git a/macos/Sources/AIROOMNative/AvatarCropEditor.swift b/macos/Sources/AIROOMNative/AvatarCropEditor.swift
+new file mode 100644
+index 0000000..adda5b2
+--- /dev/null
++++ b/macos/Sources/AIROOMNative/AvatarCropEditor.swift
+@@ -0,0 +1,155 @@
++import SwiftUI
++import AppKit
++import AIROOMCore
++
++/// A local, non-destructive portrait editor. The source WebP remains unchanged;
++/// only normalized framing coordinates are written into the encrypted member card.
++struct AvatarCropEditor: View {
++    @EnvironmentObject private var model: WorkbenchModel
++    @Environment(\.dismiss) private var dismiss
++    @Environment(\.colorScheme) private var colorScheme
++
++    let agent: AgentKind
++    let onSave: (PortraitFaceAnchor?) -> Void
++
++    @State private var draft: PortraitFaceAnchor
++    @State private var startOfDrag: PortraitFaceAnchor?
++
++    private let previewSize: CGFloat = 230
++
++    init(agent: AgentKind, initialAnchor: PortraitFaceAnchor?,
++         onSave: @escaping (PortraitFaceAnchor?) -> Void) {
++        self.agent = agent
++        self.onSave = onSave
++        _draft = State(initialValue: initialAnchor ?? agent.portraitFaceAnchor)
++    }
++
++    private var language: InterfaceLanguage { model.archive.settings.language }
++    private func t(_ zh: String, _ en: String) -> String { StudioI18n.t(zh, en, language) }
++    private var artwork: NSImage? { StudioAsset.image(StudioAsset.portrait(for: agent)) }
++
++    private func restrict(_ candidate: PortraitFaceAnchor) -> PortraitFaceAnchor {
++        guard let art = artwork else { return candidate }
++        return candidate.constrained(sourceWidth: Double(art.size.width),
++                                     sourceHeight: Double(art.size.height))
++    }
++
++    private func change(x: Double? = nil, y: Double? = nil, zoom: Double? = nil) {
++        draft = restrict(PortraitFaceAnchor(x: x ?? draft.x,
++                                           y: y ?? draft.y,
++                                           zoom: zoom ?? draft.zoom))
++    }
++
++    private var cropGesture: some Gesture {
++        DragGesture(minimumDistance: 0)
++            .onChanged { value in
++                guard let art = artwork else { return }
++                let origin = startOfDrag ?? draft
++                if startOfDrag == nil { startOfDrag = origin }
++                draft = origin.translated(
++                    dragX: Double(value.translation.width),
++                    dragY: Double(value.translation.height),
++                    diameter: Double(previewSize),
++                    sourceWidth: Double(art.size.width),
++                    sourceHeight: Double(art.size.height)
++                )
++            }
++            .onEnded { _ in startOfDrag = nil }
++    }
++
++    var body: some View {
++        VStack(alignment: .leading, spacing: 18) {
++            HStack {
++                VStack(alignment: .leading, spacing: 5) {
++                    Text(t("調整頭像", "Adjust Avatar"))
++                        .font(.title2.bold())
++                    Text(agent.rawValue)
++                        .font(.subheadline).foregroundStyle(.secondary)
++                }
++                Spacer()
++                Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
++                    .buttonStyle(.plain).foregroundStyle(.secondary)
++                    .accessibilityLabel(t("關閉", "Close"))
++            }
++            Divider()
++            HStack(alignment: .center, spacing: 32) {
++                VStack(spacing: 10) {
++                    StudioFaceArtwork(agent: agent, size: previewSize, previewAnchor: draft)
++                        .background(agent.studioColor.opacity(0.14), in: Circle())
++                        .overlay(Circle().strokeBorder(agent.studioColor.opacity(0.7), lineWidth: 2))
++                        .contentShape(Circle())
++                        .gesture(cropGesture)
++                        .accessibilityLabel(t("拖曳頭像以調整位置", "Drag avatar to reposition"))
++                    Text(t("拖曳圓形預覽來移動圖片", "Drag inside the circle to reposition"))
++                        .font(.caption).foregroundStyle(.secondary)
++                }
++                VStack(alignment: .leading, spacing: 16) {
++                    HStack(spacing: 14) {
++                        StudioFaceArtwork(agent: agent, size: 46, previewAnchor: draft)
++                            .background(agent.studioColor.opacity(0.14), in: Circle())
++                        StudioFaceArtwork(agent: agent, size: 88, previewAnchor: draft)
++                            .background(agent.studioColor.opacity(0.14), in: Circle())
++                    }
++                    Text(t("小尺寸與大尺寸即時預覽", "Live previews at sidebar and card sizes"))
++                        .font(.caption).foregroundStyle(.secondary)
++                    Spacer(minLength: 4)
++                    VStack(alignment: .leading, spacing: 7) {
++                        HStack {
++                            Text(t("縮放", "Zoom"))
++                            Spacer()
++                            Text(String(format: "%.1f×", draft.zoom)).monospacedDigit()
++                        }
++                        Slider(value: Binding(get: { draft.zoom },
++                                              set: { change(zoom: $0) }), in: 2.5...7, step: 0.1)
++                            .tint(agent.studioColor)
++                    }
++                    VStack(alignment: .leading, spacing: 7) {
++                        Text(t("水平位置（精細調整）", "Horizontal position (fine tune)"))
++                        Slider(value: Binding(get: { draft.x },
++                                              set: { change(x: $0) }), in: 0...1)
++                            .tint(agent.studioColor)
++                    }
++                    VStack(alignment: .leading, spacing: 7) {
++                        Text(t("垂直位置（精細調整）", "Vertical position (fine tune)"))
++                        Slider(value: Binding(get: { draft.y },
++                                              set: { change(y: $0) }), in: 0...1)
++                            .tint(agent.studioColor)
++                    }
++                    Text(String(format: "X %.1f%%  ·  Y %.1f%%", draft.x * 100, draft.y * 100))
++                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
++                }
++                .frame(maxWidth: .infinity)
++            }
++            .disabled(artwork == nil)
++
++            if artwork == nil {
++                StudioNotice(icon: "photo.badge.exclamationmark", message:
++                    t("找不到原始人物圖片。請先執行 ./Scripts/package-app.sh 下載素材，再重新開啟 App。",
++                      "Original portrait is missing. Run ./Scripts/package-app.sh to fetch assets, then reopen the app."))
++            } else {
++                StudioNotice(icon: "lock.shield", message:
++                    t("只儲存裁切參數，不修改原始立繪。按「儲存」後會同步更新所有房間的頭像。",
++                      "Only crop coordinates are saved; original artwork stays intact. Saving updates avatars across all rooms."))
++            }
++            Divider()
++            HStack {
++                Button(t("恢復預設位置", "Reset to Default")) {
++                    draft = agent.portraitFaceAnchor
++                    startOfDrag = nil
++                }
++                .disabled(artwork == nil)
++                Spacer()
++                Button(t("取消", "Cancel")) { dismiss() }
++                Button(t("儲存", "Save")) {
++                    onSave(draft == agent.portraitFaceAnchor ? nil : draft)
++                    dismiss()
++                }
++                .buttonStyle(.borderedProminent)
++                .disabled(artwork == nil || !model.storageAvailable)
++            }
++        }
++        .padding(25)
++        .frame(width: 690)
++        .background(StudioTheme.background(colorScheme))
++    }
++}
+diff --git a/macos/Sources/AIROOMNative/MembersView.swift b/macos/Sources/AIROOMNative/MembersView.swift
+index e7e797c..c80084f 100644
+--- a/macos/Sources/AIROOMNative/MembersView.swift
++++ b/macos/Sources/AIROOMNative/MembersView.swift
+@@ -5,6 +5,7 @@ struct MembersView: View {
+     @EnvironmentObject private var model: WorkbenchModel
+     @Environment(\.colorScheme) private var scheme
+     @State private var selected: AgentKind = .claude
++    @State private var editingCrop = false
+     private var lang: InterfaceLanguage { model.archive.settings.language }
+     private func t(_ zh: String, _ en: String) -> String { StudioI18n.t(zh, en, lang) }
+     private func memberBinding(_ member: MemberCard) -> Binding<MemberCard> {
+@@ -50,6 +51,12 @@ struct MembersView: View {
+                                     Text(selected.rawValue).font(.caption).foregroundStyle(.secondary)
+                                 }
+                                 Spacer()
++                                Button {
++                                    editingCrop = true
++                                } label: {
++                                    Label(t("調整頭像", "Adjust Avatar"), systemImage: "crop.rotate")
++                                }
++                                .disabled(!model.storageAvailable)
+                                 Toggle(t("啟用成員", "Enable Member"), isOn: memberBinding(member).enabled)
+                                     .toggleStyle(.switch)
+                             }
+@@ -76,5 +83,15 @@ struct MembersView: View {
+             .frame(maxWidth: 980)
+             .frame(maxWidth: .infinity)
+         }
++        .sheet(isPresented: $editingCrop) {
++            if let member = current {
++                AvatarCropEditor(agent: member.agent, initialAnchor: member.avatarCrop) { newCrop in
++                    var updated = member
++                    updated.avatarCrop = newCrop
++                    model.updateMember(updated)
++                }
++                .environmentObject(model)
++            }
++        }
+     }
+ }
+diff --git a/macos/Sources/AIROOMNative/StudioDesign.swift b/macos/Sources/AIROOMNative/StudioDesign.swift
+index 8ff58b3..dcabac2 100644
+--- a/macos/Sources/AIROOMNative/StudioDesign.swift
++++ b/macos/Sources/AIROOMNative/StudioDesign.swift
+@@ -76,9 +76,17 @@ struct StudioBrandMark: View {
+ /// Face crop shared by the sidebar, member card, chat bubbles and room participants.
+ /// Original artwork is a tall portrait. The face is NOT at the image centre;
+ /// preserve its aspect ratio and align the original artwork's measured face anchor.
+-private struct StudioFaceArtwork: View {
++struct StudioFaceArtwork: View {
++    @EnvironmentObject private var model: WorkbenchModel
+     let agent: AgentKind
+     let size: CGFloat
++    /// Supplied by the editor for live preview; otherwise read the saved card.
++    var previewAnchor: PortraitFaceAnchor? = nil
++
++    private var faceAnchor: PortraitFaceAnchor {
++        previewAnchor ?? model.archive.members.first(where: { $0.agent == agent })?.avatarCrop
++            ?? agent.portraitFaceAnchor
++    }
+ 
+     var body: some View {
+         GeometryReader { geometry in
+@@ -87,7 +95,7 @@ private struct StudioFaceArtwork: View {
+                    diameter: Double(geometry.size.width),
+                    sourceWidth: Double(artwork.size.width),
+                    sourceHeight: Double(artwork.size.height),
+-                   anchor: agent.portraitFaceAnchor
++                   anchor: faceAnchor
+                ) {
+                 Image(nsImage: artwork)
+                     .resizable()
+diff --git a/macos/Tests/AIROOMCoreTests/AvatarCropEditorTests.swift b/macos/Tests/AIROOMCoreTests/AvatarCropEditorTests.swift
+new file mode 100644
+index 0000000..a32b8ce
+--- /dev/null
++++ b/macos/Tests/AIROOMCoreTests/AvatarCropEditorTests.swift
+@@ -0,0 +1,65 @@
++import XCTest
++@testable import AIROOMCore
++
++final class AvatarCropEditorTests: XCTestCase {
++    private let sourceWidth = 960.0
++    private let sourceHeight = 1720.0
++
++    func testCustomCropIsPersistedPerMember() throws {
++        var state = SavedState()
++        let original = try XCTUnwrap(state.members.first(where: { $0.agent == .claude }))
++        let custom = PortraitFaceAnchor(x: 0.44, y: 0.19, zoom: 4.7)
++        let index = try XCTUnwrap(state.members.firstIndex(where: { $0.id == original.id }))
++        state.members[index].avatarCrop = custom
++        let encoded = try JSONEncoder().encode(state)
++        let decoded = try JSONDecoder().decode(SavedState.self, from: encoded)
++        XCTAssertEqual(decoded.members.first(where: { $0.agent == .claude })?.avatarCrop, custom)
++        XCTAssertNil(decoded.members.first(where: { $0.agent == .codex })?.avatarCrop)
++    }
++
++    func testLegacyMemberCardWithoutCropLoadsDefault() throws {
++        let card = MemberCard(agent: .codex, name: "GPTIA", persona: "Developer")
++        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(card)) as? [String: Any])
++        encoded.removeValue(forKey: "avatarCrop")
++        let legacy = try JSONSerialization.data(withJSONObject: encoded)
++        let restored = try JSONDecoder().decode(MemberCard.self, from: legacy)
++        XCTAssertEqual(restored.id, card.id)
++        XCTAssertEqual(restored.persona, "Developer")
++        XCTAssertNil(restored.avatarCrop)
++        XCTAssertEqual(restored.agent.portraitFaceAnchor, AgentKind.codex.portraitFaceAnchor)
++    }
++
++    func testDraggingRightAndDownMovesImageRightAndDown() throws {
++        let start = AgentKind.claude.portraitFaceAnchor
++        let changed = start.translated(dragX: 18, dragY: 24, diameter: 230,
++                                       sourceWidth: sourceWidth, sourceHeight: sourceHeight)
++        XCTAssertLessThan(changed.x, start.x)
++        XCTAssertLessThan(changed.y, start.y)
++        let before = try XCTUnwrap(PortraitCropLayout.make(diameter: 230, sourceWidth: sourceWidth,
++                    sourceHeight: sourceHeight, anchor: start))
++        let after = try XCTUnwrap(PortraitCropLayout.make(diameter: 230, sourceWidth: sourceWidth,
++                    sourceHeight: sourceHeight, anchor: changed))
++        XCTAssertEqual(after.centerX - before.centerX, 18, accuracy: 0.000001)
++        XCTAssertEqual(after.centerY - before.centerY, 24, accuracy: 0.000001)
++    }
++
++    func testDraggingCannotExposeOutsideOfArtwork() throws {
++        let start = AgentKind.codex.portraitFaceAnchor
++        let changed = start.translated(dragX: 100_000, dragY: -100_000, diameter: 230,
++                                       sourceWidth: sourceWidth, sourceHeight: sourceHeight)
++        let crop = try XCTUnwrap(PortraitCropLayout.make(diameter: 230, sourceWidth: sourceWidth,
++                    sourceHeight: sourceHeight, anchor: changed))
++        XCTAssertLessThanOrEqual(crop.originX, 0.000001)
++        XCTAssertLessThanOrEqual(crop.originY, 0.000001)
++        XCTAssertGreaterThanOrEqual(crop.originX + crop.imageWidth, 230 - 0.000001)
++        XCTAssertGreaterThanOrEqual(crop.originY + crop.imageHeight, 230 - 0.000001)
++    }
++
++    func testZoomAndPositionClamping() {
++        let changed = PortraitFaceAnchor(x: -1, y: 3, zoom: 100)
++            .constrained(sourceWidth: sourceWidth, sourceHeight: sourceHeight)
++        XCTAssertEqual(changed.zoom, 7)
++        XCTAssertGreaterThanOrEqual(changed.x, 0)
++        XCTAssertLessThanOrEqual(changed.y, 1)
++    }
++}
