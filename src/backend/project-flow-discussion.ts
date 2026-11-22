@@ -19,6 +19,13 @@ export function captureFlowDiscussion(store:Store,projectId:string,params:Record
     ...(usableMinutes?{minutesMessageId:usableMinutes.id,minutes:{id:usableMinutes.id,author:usableMinutes.authorName??usableMinutes.author,text:usableMinutes.text}}:{}),
     ...(!usableMinutes&&summary?{background:summary.text}:{}),
     messages:all.slice(cut+1).filter(completed).map(message=>({id:message.id,author:message.authorName??message.author,text:message.text}))};
-  if(JSON.stringify(context).length>60000)throw new FlowError('CONTEXT_TOO_LARGE','方案讨论记录较长，请先压缩项目会议话题或选择已完成的会议纪要，再起草方案。');
+  // Too long: keep minutes/summary and the newest talk, drop the oldest, then cut the head of the last message. Copies only; chat is untouched.
+  const size=()=>JSON.stringify(context).length,limit=60000;
+  if(size()<=limit)return context;
+  context.contextLimitNote='讨论记录超出长度上限，已保留纪要或摘要与最新发言，省略较早内容。';
+  while(context.messages.length>1&&size()>limit)context.messages.shift();
+  // Drop the oldest tenth of the one remaining message until it fits.
+  while(context.messages[0]?.text&&size()>limit){const m=context.messages[0];context.messages[0]={...m,text:m.text.slice(Math.ceil(m.text.length/10))};}
+  if(size()>limit)throw new FlowError('CONTEXT_TOO_LARGE','方案讨论记录较长，请先压缩项目会议话题或选择已完成的会议纪要，再起草方案。');
   return context;
 }

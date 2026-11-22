@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Attachment } from '../shared/types';
 import { ATTACHMENTS_MAX, ATTACHMENT_MAX_BYTES, IMAGE_SEND_MAX, TEXT_INLINE_MAX, TEXT_INLINE_TOTAL, attachmentKind, attachmentMime, isAttachmentId, safeAttachmentName, sizeText } from '../shared/attachments';
@@ -25,6 +25,48 @@ export function importAttachments(dataDirectory: string, value: unknown): Attach
     copyFileSync(source, attachmentPath(dataDirectory, { id, name }));
     return { id, name, kind: attachmentKind(name), mime: attachmentMime(name), size };
   });
+}
+
+/** Pasted image types and the leading bytes each real file starts with. */
+const PASTE_TYPES = new Map<string, { extension: string; valid: (bytes: Buffer) => boolean }>([
+  ['image/png', { extension: 'png', valid: bytes => bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) }],
+  ['image/jpeg', { extension: 'jpg', valid: bytes => bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff }],
+  ['image/webp', { extension: 'webp', valid: bytes => bytes.toString('latin1', 0, 4) === 'RIFF' && bytes.toString('latin1', 8, 12) === 'WEBP' }],
+  ['image/gif', { extension: 'gif', valid: bytes => /^GIF8[79]a$/.test(bytes.toString('latin1', 0, 6)) }],
+]);
+/** Store images pasted from the clipboard; they arrive as base64 because a pasted screenshot has no file path. */
+export function importPastedImages(dataDirectory: string, value: unknown): Attachment[] {
+  const images = Array.isArray(value) ? value : [];
+  if (!images.length) throw new Error('没有收到可以附上的图片');
+  if (images.length > ATTACHMENTS_MAX) throw new Error(`一次最多附 ${ATTACHMENTS_MAX} 个文件`);
+  const checked = images.map(image => {
+    const type = PASTE_TYPES.get(String(image?.type)), data = typeof image?.data === 'string' ? image.data : '';
+    if (!type || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error('只能贴上 PNG、JPEG、WebP 或 GIF 图片');
+    // Reject by encoded length before decoding so an oversized paste never becomes a large buffer.
+    if (data.length * 3 / 4 > ATTACHMENT_MAX_BYTES + 3) throw new Error(`贴上的图片超过 ${sizeText(ATTACHMENT_MAX_BYTES)}`);
+    const bytes = Buffer.from(data, 'base64');
+    if (!bytes.length || bytes.length > ATTACHMENT_MAX_BYTES) throw new Error(`贴上的图片是空的或超过 ${sizeText(ATTACHMENT_MAX_BYTES)}`);
+    if (!type.valid(bytes)) throw new Error('贴上的内容不是有效的图片');
+    return { bytes, extension: type.extension };
+  });
+  // Local time, so a screenshot pasted at 3 a.m. is named for today rather than yesterday's UTC date.
+  const now = new Date(), two = (value: number) => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
+  const created: string[] = [];
+  try {
+    return checked.map(({ bytes, extension }, index) => {
+      const id = randomUUID(), name = `截图-${stamp}${checked.length > 1 ? `-${index + 1}` : ''}.${extension}`;
+      created.push(path.join(dataDirectory, 'attachments', id));
+      mkdirSync(created.at(-1)!, { recursive: true });
+      writeFileSync(attachmentPath(dataDirectory, { id, name }), bytes);
+      return { id, name, kind: attachmentKind(name), mime: attachmentMime(name), size: bytes.length };
+    });
+  } catch (error) {
+    // Nothing from a failed batch reaches the tray, so remove what it wrote rather than wait for the daily sweep.
+    // A failed cleanup must not hide the original error or stop the rest of the cleanup.
+    for (const directory of created) { try { rmSync(directory, { recursive: true, force: true }); } catch {} }
+    throw error;
+  }
 }
 
 /** Accept attachment records from the renderer: only copies already in the store; kind and size come from disk. */

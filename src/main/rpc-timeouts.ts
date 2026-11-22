@@ -1,5 +1,5 @@
 const LONG_OPERATIONS=new Set(['room.compress','room.archive','executor.authenticate']);
-const WORKSPACE_OPERATIONS=new Set(['project.remove','session.delete','room.clear','room.uninherit','attachment.import','workspace.apply','workspace.discard','workspace.undo','workspace.undo.info']);
+const WORKSPACE_OPERATIONS=new Set(['project.remove','session.delete','room.clear','room.uninherit','attachment.import','attachment.importPasted','workspace.apply','workspace.discard','workspace.undo','workspace.undo.info']);
 const PROVIDER_OPERATIONS=new Set(['member.versions','provider.balance','provider.quota']);
 // A connection check starts the member program several times; right after a download it starts cold.
 const CONNECTION_CHECKS=new Set(['provider.probe','member.use']);

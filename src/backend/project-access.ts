@@ -9,7 +9,7 @@ import type {ApplyJournal} from './project-flow-apply';
 import {scopePath} from '../shared/project-flow-protocol';
 import {resolveSafePath} from './security';
 import {folderPath} from './folder-path';
-interface Claim {projectId:string;directory:string;keys:string[];reason:string;kind:'execution'|'journal'|'write'|'removal';journalState?:ApplyJournal['state']}
+interface Claim {projectId:string;directory:string;keys:string[];reason:string;kind:'execution'|'draft'|'journal'|'write'|'removal';journalState?:ApplyJournal['state']}
 interface Lease extends Claim {lockKeys:string[];id:string;state:'pending'|'running';run:()=>Promise<unknown>;resolve:(v:unknown)=>void;reject:(e:unknown)=>void}
 const leases=new WeakMap<Store,Map<string,Lease>>(),removals=new WeakMap<Store,Set<string>>();
 export function markProjectRemoving(store:Store,id:string,value:boolean){let ids=removals.get(store);if(!ids){ids=new Set();removals.set(store,ids);}if(value)ids.add(id);else ids.delete(id);}
@@ -53,7 +53,7 @@ function captureKeys(p:Project){return (p.writeScopes??['.']).map(s=>physicalPat
 export function projectClaims(store:Store):Claim[]{
   const projects=new Map(store.list<Project>('projects').map(p=>[p.id,p])),claims:Claim[]=[];
   const add=(id:string,reason:string,b?:WriteBoundary,kind:Claim['kind']='execution')=>{const p=projects.get(id);if(p)claims.push({projectId:id,directory:p.directory,keys:kind==='removal'?[folderPath(p.directory).key]:claimedKeys(p,b),reason,kind});};
-  for(const f of store.list<ProjectFlow>('project_flows'))if(!['completed','cancelled'].includes(f.status))add(f.projectId,'工作流程尚未结束',f.writeBoundary);
+  for(const f of store.list<ProjectFlow>('project_flows'))if(!['completed','cancelled'].includes(f.status))add(f.projectId,'工作流程尚未结束',f.writeBoundary,['planning','awaiting_plan'].includes(f.status)&&!f.currentRoundId?'draft':'execution');
   for(const r of store.list<JointReview>('flow_joint_reviews'))if(!['completed','cancelled','stale'].includes(r.status))add(r.projectId,'共同评审或比稿尚未结束',r.writeBoundary);
   for(const run of store.list<Run>('runs')){
     const s=store.get<Session>('sessions',run.sessionId);if(!s?.writeMode||s.restoredHistoryOnly)continue;
@@ -72,6 +72,8 @@ export function assertProjectAdmission(store:Store,id:string,includeOwn=false,re
   const keys=requestedKeys??captureProjectBoundary(store,id).scopeKeys,map=leaseMap(store);
   const conflict=projectClaims(store).find(c=>{
     if(!includeOwn&&c.projectId===id)return false;
+    // A plan still being drafted writes nothing; it blocks removal (assertProjectIdle) but not other work.
+    if(c.kind==='draft')return false;
     if(queueWrite&&c.kind==='write')return false;
     // An active write owns its applying journal. Wait for its lease, then recheck persisted recovery state.
     if(queueWrite&&c.kind==='journal'&&c.journalState==='applying'&&[...map.values()].some(l=>l.projectId===c.projectId&&l.state==='running'&&keysOverlap(l.keys,c.keys)))return false;

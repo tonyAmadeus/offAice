@@ -171,6 +171,7 @@ import {
   attachmentPath,
   describeAttachments,
   importAttachments,
+  importPastedImages,
   resolveAttachments,
   withoutPath,
 } from "./attachments";
@@ -2970,6 +2971,8 @@ export class Engine {
         );
       case "attachment.import":
         return importAttachments(this.store.dataDirectory, params.paths);
+      case "attachment.importPasted":
+        return importPastedImages(this.store.dataDirectory, params.images);
       default:
         throw new Error(UNAVAILABLE_OPERATION);
     }
@@ -6491,8 +6494,14 @@ export class Engine {
         ...runSettings.permissions,
         [run.provider]: memberPermissions(this.settings, member, isAcpId(run.provider) ? this.store.get<AcpExecutor>("executors", run.provider) : undefined),
       };
-    // The chat room is conversation only: no commands and no file changes, whatever the member's defaults.
-    if (project.kind === "lounge" && run.provider !== "deepseek")
+    // Room speech and @ replies act with the member's own permissions, in the bound project when there is one.
+    // Hand votes, minutes and images stay conversation only.
+    // One acting speaker per room at a time; others in parallel talk read-only so they cannot overwrite each other's files.
+    const roomActs = project.kind === "lounge" && (!session.purpose || session.purpose === "room-mention")
+      && ![...this.active.values()].some((other) => other.ctx.run.id !== run.id && other.ctx.session.projectId === session.projectId && other.ctx.session.writeMode);
+    const roomProject = project.kind === "lounge" ? this.projectRoomDirectory(project.roomId) : undefined;
+    if (roomActs) session = { ...session, writeMode: true, workspaceKind: "original" };
+    if (project.kind === "lounge" && !roomActs && run.provider !== "deepseek")
       runSettings.permissions = {
         ...runSettings.permissions,
         [run.provider]: {
@@ -6505,7 +6514,7 @@ export class Engine {
       run,
       session,
       conversation: project.kind === 'lounge' ? 'room' : !session.purpose && !session.flowId && !run.flowOperationId && this.store.get('desk_session_links',session.id) ? 'desk' : undefined,
-      roomProjectDirectory: project.kind === "lounge" ? this.projectRoomDirectory(project.roomId) : undefined,
+      roomProjectDirectory: roomProject,
       settings: runSettings,
       persona: personaInstructions(
         member,
@@ -6520,7 +6529,7 @@ export class Engine {
             })),
           }
         : {}),
-      cwd: session.workspace || project.directory,
+      cwd: (roomActs && roomProject) || session.workspace || project.directory,
       env: buildEnvironment(this.settings),
       deepseekKey: this.key,
       emit: (kind, text, data, fidelity) => {

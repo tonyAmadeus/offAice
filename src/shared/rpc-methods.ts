@@ -56,6 +56,7 @@ export const RENDERER_METHODS: readonly string[] = [
   'memory.accept',
   'memory.dismiss',
   'attachment.pick',
+  'attachment.importPasted',
   'attachment.import',
   'attachment.reveal',
   'room.archive',

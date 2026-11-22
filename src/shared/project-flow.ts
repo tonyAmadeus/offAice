@@ -38,7 +38,7 @@ export interface UserChangeRequest {id:string;integrationId:string;opinion:strin
 export interface RoundSpec { key:string; title:string; goal:string; requiresUserAcceptance:boolean;completionCriteria?:CompletionCriterion[];reviewLevel?:ReviewLevel }
 export interface TaskSpec { key:string; roundKey:string; title:string; memberId:string; goal:string; inputs:string[]; completionCriteria:CompletionCriterion[]; dependencies:string[]; allowedPaths:string[];reviewerMemberId?:string;review?:boolean;reuse?:string }
 export interface PlanPayload { objective:string; scope:string; deliverables:string[]; acceptanceCriteria:CompletionCriterion[]; rounds:RoundSpec[]; tasks:TaskSpec[] }
-export interface FlowDiscussionContext { roomId:string; threadId:string; capturedAt:string; minutesMessageId?:string; background?:string; minutes?:{id:string;author:string;text:string}; messages:{id:string;author:string;text:string}[] }
+export interface FlowDiscussionContext { roomId:string; threadId:string; capturedAt:string; contextLimitNote?:string; minutesMessageId?:string; background?:string; minutes?:{id:string;author:string;text:string}; messages:{id:string;author:string;text:string}[] }
 export interface ProjectFlow extends FlowRecord { leadMemberId:string; memberIds:string[]; activePlanId?:string; roomId:string; threadId?:string; topic?:string; discussionContext?:FlowDiscussionContext; dispatchMode:'running'|'paused'|'stopping'; status:'planning'|'awaiting_plan'|'active'|'completed'|'cancelled'; blockedReasons:string[]; currentRoundId?:string }
 export interface ProjectFlow {reviewLevel?:ReviewLevel}
 export interface ProjectFlow {memberConfigs?:Record<string,import('./executor-config').RequestedRunConfig>}

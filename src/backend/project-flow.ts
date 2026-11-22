@@ -2210,7 +2210,8 @@ export class ProjectFlowController {
         this.store,
         project.id,
         p,
-        topic ? undefined : previous?.updatedAt,
+        // Skip only what the last flow already captured; ending it later must not hide newer talk.
+        topic ? undefined : (previous?.discussionContext?.capturedAt ?? previous?.createdAt),
       );
       if (
         !topic &&

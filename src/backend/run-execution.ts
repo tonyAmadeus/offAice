@@ -83,7 +83,8 @@ export async function executeRun(host: RunExecutionHost, active: RunExecutionAct
   try {
     const project = host.require<Project>("projects", ctx.session.projectId);
     assertProjectBoundary(host.store, project.id, ctx.run.writeBoundary);
-    if (!ctx.session.workspace) {
+    // Acting room speech (writeMode set only in context) works in place: no copy, keep its cwd and permissions.
+    if (!ctx.session.workspace && !(project.kind === "lounge" && ctx.session.writeMode)) {
       const workspace = await (ctx.session.writeMode
         ? withProjectSnapshot(
             host.store,
@@ -227,7 +228,9 @@ export async function executeRun(host: RunExecutionHost, active: RunExecutionAct
         ? ctx.session.workspaceKind === "original"
           ? "在本话题的工作文件夹直接工作；不需要写回副本"
           : "从独立任务副本开始执行；修改记录用于核对与回退"
-        : "只读会话；文件修改需另开允许写入的任务",
+        : project.kind === "lounge" && (!ctx.session.purpose || ctx.session.purpose === "room-mention")
+          ? "另一位成员正在执行，本轮只读发言"
+          : "只读会话；文件修改需另开允许写入的任务",
       undefined,
       "derived",
     );
