@@ -575,11 +575,18 @@ export class DshAdapter implements Adapter {
       this.stamp=stamp;this.reusable=true;this.sessionClosed=false;
       if (this.stopped) return {stopped:true};
       const nativeId=ctx.session.purpose==='room-hand'?undefined:ctx.session.nativeId;
-      const resuming=Boolean(nativeId);
+      let resuming=Boolean(nativeId);
+      // DSH resumes a session only in the folder it was opened in. Room speech that now acts in the
+      // project folder starts a fresh native session there, with the room context rebuilt below.
+      if(nativeId&&!(reuse&&loadedSession===nativeId))this.sessionId=nativeId;
+      const resumed=nativeId&&!(reuse&&loadedSession===nativeId)?await this.request('session/resume',{sessionId:nativeId,cwd:ctx.cwd,mcpServers:[]}).catch((error:Error)=>{
+        if(!/session cwd does not match/i.test(error.message))throw error;
+        resuming=false;this.sessionId=undefined;return undefined;
+      }):undefined;
       if (reuse && loadedSession && loadedSession === nativeId) this.sessionId=loadedSession;
-      else if (nativeId) {
+      else if (nativeId && resumed) {
         this.sessionId=nativeId;
-        const result=await this.request('session/resume',{sessionId:nativeId,cwd:ctx.cwd,mcpServers:[]});
+        const result=resumed;
         this.sessionId=result.sessionId || nativeId;this.sessionState=result;
         const report=acpConfigReport(result,'dsh.resume');if(report.model)report.model=dshModelSelection(report.model).model;ctx.recordConfig?.(report);
         ctx.emit('warning','DSH 已恢复原生上下文；ACP 不回放断连期间的历史。',undefined,'lossy');
