@@ -86,7 +86,10 @@ export class ZcodeAdapter implements Adapter{
     if(!state.ready)throw new Error(state.detail);
     const writable=permissions.commands==='auto'&&permissions.fileScope==='any'&&permissions.network;
     // Room speech under restricted ZCode permissions keeps talking read-only instead of failing the turn.
-    if(context.conversation==='room'&&context.session.writeMode&&!writable)context={...context,session:{...context.session,writeMode:false}};
+    if(context.conversation==='room'&&context.session.writeMode&&!writable){
+      context={...context,session:{...context.session,writeMode:false}};
+      context.emit('warning','ZCode 需要自动允许命令、任意文件范围和联网才能执行；本轮只读发言。',undefined,'derived');
+    }
     // Project meeting rooms keep the read tools; plan mode and the denials below still forbid changes.
     const roomFiles=roomProjectFiles(context);
     const roomTools=plainRoomSpeech(context)?(await this.roomTools(command.path,hash=>{
