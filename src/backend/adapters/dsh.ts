@@ -100,6 +100,18 @@ function dshPathDenialImplementation(name: string, input: Record<string, unknown
   } catch { return '无法安全核对文件路径或文件链接，已拒绝。'; }
 }
 
+/** The stored DeepSeek login in DSH's own credentials file, read without starting DSH (a cold start takes ~18 s).
+ * true/false when the file answers clearly; undefined when it cannot be read or parsed, so the caller asks DSH. */
+export async function storedDshLogin(home:string):Promise<boolean|undefined> {
+  let text:string;
+  try{text=await readFile(path.join(home,'.credentials.yaml'),'utf8');}
+  catch(error){return (error as NodeJS.ErrnoException).code==='ENOENT'?false:undefined;}
+  if(!/^version:\s*1\s*$/m.test(text))return undefined;
+  const block=/^  deepseek-account-platform\/default:\s*\r?\n((?:    .*\r?\n?)*)/m.exec(text);
+  if(!block)return false;
+  return /^    kind:\s*grant\s*$/m.test(block[1])?true:undefined;
+}
+
 /** Self-contained: a read tool may name an absolute path inside a project meeting room's read-only root. */
 function dshReadRootImplementation(name: string, input: Record<string, unknown>, roots: unknown, check: typeof dshPathDenialImplementation, p: typeof path, fs: {lstatSync: typeof lstatSync; realpathSync: typeof realpathSync}): boolean {
   if (!['read', 'read_image', 'glob', 'grep'].includes(name) || !Array.isArray(roots) || !input || typeof input !== 'object' || Array.isArray(input)) return false;
@@ -550,7 +562,9 @@ export class DshAdapter implements Adapter {
         // the first request and removed by DSH itself, so a slow or failed online profile query
         // must not stop the round or read as a lost login.
         // A cold DSH start can outlast the check while other members launch; go ahead and let the turn itself report a lost login.
-        const account=await this.accountStatus(ctx.settings,ctx.env,'state').catch(()=>({authenticated:true,state:'unchecked'}));
+        const local=await storedDshLogin(home);
+        const account=local!==undefined?{authenticated:local,state:local?'signed-in':'signed-out'}
+          :await this.accountStatus(ctx.settings,ctx.env,'state').catch(()=>({authenticated:true,state:'unchecked'}));
         if(account.state==='signed-out')throw new Error('DSH 独立账号已退出登录，请在成员设置里重新登录。');
         if(!account.authenticated)throw new Error('DSH 本地登录记录暂时无法读取，请重新检测连接。');
         if(account.state!=='unchecked'){observeAccount('account');this.accountCheckedAt=Date.now();}
