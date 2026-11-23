@@ -1026,7 +1026,7 @@ export class ProjectFlowController {
           const wait: QuotaWait = {...this.record(op.projectId, op.flowId), targetId: task?.id ?? integration?.roundId ?? op.targetId, memberId: member.memberId ?? member.provider, stage, startedAt: at(), status: "waiting", operationId: op.id, resetAt};
           this.store.put("flow_quota_waits", wait.id, wait);
         }
-        throw new FlowError("RATE_LIMITED", "成员额度已用完，已保留当前会话和成果。" + (resetAt ? "预计恢复时间：" + new Date(resetAt * 1000).toLocaleString("zh-CN") + "；到点会提示接着做。" : "恢复时间尚未提供；额度恢复后可接着做。"));
+        throw new FlowError("RATE_LIMITED", "成员额度已用完，已保留当前会话和成果。" + (resetAt ? "预计恢复时间：" + new Date(resetAt * 1000).toLocaleString("zh-CN") + "；到点会提示接着做。" : "恢复时间尚未提供；额度恢复后可接着做。") + "要换人：点“放弃这次尝试，重新安排”，随后会马上询问继续等还是换人接手。");
       }
       if (!["ended", "completed"].includes(result.status))
         throw new FlowError(
@@ -6879,15 +6879,6 @@ export class ProjectFlowController {
             ? this.need<Task>("flow_tasks", decision.taskId)
             : undefined,
           round = this.need<Round>("flow_rounds", decision.roundId!);
-        // The rate-limited attempt stays "blocked" and would make requireIdle refuse the handover; the user's choice ends it.
-        const stuck = wait.operationId ? this.store.get<FlowOperation>("flow_operations", wait.operationId) : undefined,
-          stuckRun = stuck?.runId ? this.store.get<Run>("runs", stuck.correctionRunId ?? stuck.runId) : undefined;
-        if (stuck?.state === "blocked" && !["queued", "running", "waiting_user", "stopping"].includes(stuckRun?.status ?? ""))
-          this.update("flow_operations", stuck, {
-            state: "done",
-            result: { abandoned: true, reassigned: true },
-            error: "用户选择换人接手：额度未恢复的旧尝试已放弃",
-          });
         this.requireIdle(task?.id ?? round.id);
         if (choice === "交给我裁定" && task)
           this.disputeDecision(

@@ -19,6 +19,10 @@ test('the chat preflight reads the stored DSH login without starting DSH', async
     assert.equal(await storedDshLogin(home), true, 'Windows line endings');
     writeFileSync(file, 'version: 1\nrecords:\n  deepseek-account-platform/device:\n    kind: grant\n    payload: x\n');
     assert.equal(await storedDshLogin(home), false, 'only the device record: signed out');
+    writeFileSync(file, signedIn.replace('  deepseek-account-platform/default:', '  "deepseek-account-platform/default":'));
+    assert.equal(await storedDshLogin(home), undefined, 'quoted key: ask DSH, never read as signed out');
+    writeFileSync(file, 'version: 1\nrecords: {"deepseek-account-platform/default": {kind: grant, payload: {token: x}}}\n');
+    assert.equal(await storedDshLogin(home), undefined, 'inline mapping: ask DSH');
     writeFileSync(file, 'version: 2\nrecords: {}\n');
     assert.equal(await storedDshLogin(home), undefined, 'unknown format: ask DSH');
     writeFileSync(file, signedIn.replace('kind: grant\n    payload:\n      token', 'kind: other\n    payload:\n      token'));

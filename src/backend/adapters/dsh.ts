@@ -107,9 +107,11 @@ export async function storedDshLogin(home:string):Promise<boolean|undefined> {
   try{text=await readFile(path.join(home,'.credentials.yaml'),'utf8');}
   catch(error){return (error as NodeJS.ErrnoException).code==='ENOENT'?false:undefined;}
   if(!/^version:\s*1\s*$/m.test(text))return undefined;
+  // Any YAML spelling of the key (quoted, inline) still contains its text; absent text means no login.
+  if(!text.includes('deepseek-account-platform/default'))return false;
+  // Only the plain layout DSH writes is read here; any other spelling asks DSH, which parses YAML fully.
   const block=/^  deepseek-account-platform\/default:\s*\r?\n((?:    .*\r?\n?)*)/m.exec(text);
-  if(!block)return false;
-  return /^    kind:\s*grant\s*$/m.test(block[1])?true:undefined;
+  return block&&/^    kind:\s*grant\s*$/m.test(block[1])?true:undefined;
 }
 
 /** Self-contained: a read tool may name an absolute path inside a project meeting room's read-only root. */
