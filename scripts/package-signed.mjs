@@ -1,5 +1,5 @@
 import {execFileSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
@@ -11,6 +11,10 @@ assert.equal(process.platform,'win32','Windows signing requires a Windows build 
 const builderPackage=createRequire(import.meta.url).resolve('electron-builder/package.json');
 const builder=path.resolve(path.dirname(builderPackage),JSON.parse(readFileSync(builderPackage,'utf8')).bin['electron-builder']);
 const run=(script,args=[])=>execFileSync(process.execPath,[script,...args],{cwd:root,stdio:'inherit',windowsHide:true});
+// A broken build must not ship: typecheck and unit tests first.
+run('node_modules/typescript/bin/tsc',['--noEmit']);
+run('scripts/build-job.mjs');
+execFileSync(process.execPath,['--import','tsx','--test',...readdirSync(path.join(root,'tests')).filter(name=>name.endsWith('.test.ts')).map(name=>`tests/${name}`)],{cwd:root,stdio:'inherit',windowsHide:true});
 run('scripts/build.mjs');
 // Refuse an unsigned distribution when no signing identity is available.
 run(builder,['--win',...(green?['--dir']:['nsis','portable']),'--config','electron-builder.json','--config.forceCodeSigning=true']);

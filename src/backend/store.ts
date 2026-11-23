@@ -1,5 +1,5 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
-import { mkdirSync, appendFileSync } from 'node:fs';
+import { mkdirSync, appendFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type {RoomId, AcpExecutor, TimelineEvent, Run, Approval, Collaboration, Project, Snapshot, Settings, ProviderInfo, MemberProfile, UserProfile, RoomMessage, RoomState, RoomThread, RoomHistory } from '../shared/types';
@@ -48,6 +48,9 @@ export class Store {
     this.dataDirectory=path.resolve(dataDirectory);
     mkdirSync(this.dataDirectory,{recursive:true});
     mkdirSync(path.join(this.dataDirectory,'logs'),{recursive:true});
+    // Daily event logs mirror SQLite; keep 30 days so they do not grow without bound.
+    const oldest=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+    for(const name of readdirSync(path.join(this.dataDirectory,'logs')))if(/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)&&name.slice(0,10)<oldest)try{rmSync(path.join(this.dataDirectory,'logs',name),{force:true});}catch{/* A locked old log is retried next start. */}
     this.db=new DatabaseSync(path.join(this.dataDirectory,'airoom.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS entities (entity TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(entity,id));

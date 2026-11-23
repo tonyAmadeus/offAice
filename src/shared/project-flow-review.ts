@@ -47,8 +47,19 @@ export function rejectUserCriteria(criteria:CompletionCriterion[],userName=''){
   const invalid=criteria.filter(c=>criterionKind(c)!=='owner'&&isUserAcceptanceCriterion(criterionText(c),userName)).map(criterionText);
   if(invalid.length)throw new FlowError('INVALID_PROTOCOL','未标成 owner 的成员完成标准不能依赖用户确认或验收；请使用带 text 和 kind 的 JSON 对象，例如 '+JSON.stringify({text:invalid[0],kind:'owner'})+'，留待用户验收。不要只在字符串前添加 owner: 前缀。待修正标准：'+invalid.join('、'));
 }
+/** Why a criterion stayed unverified, from the reviewer's own evidence, so the owner can tell a retry from a handover. */
+export function unverifiedCause(evidence?:string){
+  const text=(evidence??'').replace(/\s+/g,' ').trim();if(!text)return '\n  原因：检查者没有说明（可能没有实际执行）';
+  const kind=/找不到|不存在|no such file|not found|cannot find|ENOENT/i.test(text)?'文件不存在'
+    :/权限|拒绝|denied|not permitted|只读|read-only|sandbox/i.test(text)?'没有执行权限'
+    :/额度|rate.?limit|quota|usage limit/i.test(text)?'额度用完'
+    :/exit code [1-9]|退出码\s*[1-9]|Traceback|Error:|失败/i.test(text)?'指令执行失败':'';
+  return '\n  原因：'+(kind?kind+' — ':'')+(text.length>160?text.slice(0,160)+'…':text);
+}
 /** Preserve the member's verdict. Eligibility to advance is a separate, evidence-based outcome. */
-export function assessReview(payload:ReviewPayload,required:string[],deferred:string[]=[],previous:ReviewFinding[]=[],overruled:string[]=[],judged:string[]=[]){
+export function assessReview(payload:ReviewPayload,required:string[],deferred:string[]=[],previous:ReviewFinding[]=[],overruled:string[]=[],judged:string[]=[],autoRan:string[]=[]){
+  // Commands AIROOM itself ran before the check have a real completion record outside the reviewer's run.
+  const squash=(c?:string)=>(c??'').replace(/\s+/g,' ').trim(),ran=new Set(autoRan.map(squash));
   // Defer only an explicitly unavailable interactive check, never a failed product behavior.
   const practical = required.filter(c => payload.criteriaResults.some(r => r.criterion===c&&!r.verified&&
     /浏览器|实机|真实设备|browser/i.test(c+' '+r.evidence)&&
@@ -63,10 +74,10 @@ export function assessReview(payload:ReviewPayload,required:string[],deferred:st
     if(old&&check?.resolved&&f.kind==='verified'&&f.severity!=='optional')reasons.push('旧问题核对与问题清单相互矛盾：'+f.location);
     return {...f,...(old?{previousFindingId:old.id}:{}),disposition:needsFix?'requires-fix' as const:'advice' as const};}),observedDefects=findings.filter(f=>f.disposition==='requires-fix');
   const missing=required.filter(c=>!payload.criteriaResults.some(r=>r.criterion===c&&r.verified&&Boolean(r.evidence.trim())));
-  const unbound=payload.evidence.filter(e=>commandEvidenceProblem(e)==='missing-completion');
+  const unbound=payload.evidence.filter(e=>commandEvidenceProblem(e)==='missing-completion'&&!ran.has(squash(e.command)));
   const conflicting=payload.evidence.filter(e=>['exit-code-mismatch','failed-execution'].includes(commandEvidenceProblem(e)??''));
   const onlyDeferredIncomplete=deferred.length>0&&!missing.length&&payload.criteriaResults.some(r=>deferred.includes(r.criterion)&&!r.verified)&&payload.criteriaResults.filter(r=>!r.verified).every(r=>deferred.includes(r.criterion));
-  if(missing.length)reasons.push('未能核实：\n'+missing.map(c=>'• '+c).join('\n'));
+  if(missing.length)reasons.push('未能核实：\n'+missing.map(c=>'• '+c+unverifiedCause(payload.criteriaResults.find(r=>r.criterion===c)?.evidence)).join('\n'));
   if(!payload.verificationComplete&&required.length&&!onlyDeferredIncomplete)reasons.push('必要验证尚未完成。');
   if(unbound.length)reasons.push('命令缺少实际完成记录：'+unbound.map(e=>e.command).join('、'));
   if(conflicting.length)reasons.push('退出码声明与原生执行结果矛盾：'+conflicting.map(e=>e.command).join('、'));

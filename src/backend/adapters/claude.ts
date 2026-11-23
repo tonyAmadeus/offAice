@@ -238,6 +238,8 @@ export class ClaudeAdapter implements Adapter {
   private messageOwners=new Map<string,string|undefined>();
   private matchedAssistantMessages=0;
   private turnTools=new Set<string>();
+  // Streams (parent_tool_use_id, or 'main') whose own tool result just came back: Claude continues each with one untagged message.
+  private toolContinues=new Set<string>();
   private strictTurn=false;
   private malformed=false;
   private closing?:Promise<void>;
@@ -334,7 +336,7 @@ export class ClaudeAdapter implements Adapter {
     if (this.context) throw new Error('这个 Claude 适配器已有活动任务。');
     const stamp=this.runtimeFingerprint(context),reuse=context.roomRuntime&&context.session.purpose!=='room-hand'&&this.canReuse()&&this.stamp===stamp&&this.nativeSessionId===context.session.nativeId;
     this.context = context; this.stopped = false; this.sent = false; this.acknowledged = false;
-    this.strictTurn=!!reuse;this.correlated=false;this.streamCorrelation=true;this.malformed=false;this.streamOwners.clear();this.messageOwners.clear();this.matchedAssistantMessages=0;this.turnTools.clear();
+    this.strictTurn=!!reuse;this.correlated=false;this.streamCorrelation=true;this.malformed=false;this.streamOwners.clear();this.messageOwners.clear();this.matchedAssistantMessages=0;this.turnTools.clear();this.toolContinues.clear();
     this.result = undefined; this.textStreamed = false; this.thinkingStreamed = false; this.lastText = '';this.rejectedLimit=false;
     let keep=false;
     try {
@@ -450,6 +452,10 @@ export class ClaudeAdapter implements Adapter {
     if(value.type==='stream_event'&&!this.result){
       const key=value.parent_tool_use_id??'main';
       if(value.event?.type==='message_start'){
+        // Claude Code (2.1.292 and 2.1.330 alike) does not tag the message that follows a tool result.
+        // Each of this turn's tool results lets exactly the next untagged message on that same stream through;
+        // a frame naming several user messages is never treated as untagged.
+        if(!reference&&!Array.isArray(value.user_message_uuids)&&this.toolContinues.delete(key))reference=this.inputUuid;
         this.streamOwners.set(key,reference);
         if(typeof value.event.message?.id==='string')this.messageOwners.set(JSON.stringify([key,value.event.message.id]),reference);
       }
@@ -479,6 +485,8 @@ export class ClaudeAdapter implements Adapter {
       if (context.settings.claudeAuthMode!=='api'&&value.apiKeySource && !['none', 'claude.ai', 'oauth', 'subscription'].includes(value.apiKeySource)) { context.emit('error', 'Claude 报告了 API Key 来源，正在停止订阅任务。', { apiKeySource: value.apiKeySource }); void this.stop(); }
     } else if (value.type === 'user') {
       if (value.uuid === this.inputUuid && value.parent_tool_use_id == null && !this.acknowledged) { this.acknowledged = true; context.markDelivery('confirmed'); }
+      // A tool result arriving after this turn's final result has nothing left to continue.
+      if (!this.result) for (const block of value.message?.content ?? []) if (block.type === 'tool_result'&&this.turnTools.has(block.tool_use_id)) this.toolContinues.add(value.parent_tool_use_id??'main');
       for (const block of value.message?.content ?? []) if (block.type === 'tool_result'&&(!this.strictTurn||this.turnTools.has(block.tool_use_id))) context.emit('tool', describe(block.content), { ...block, parent_tool_use_id: value.parent_tool_use_id });
     } else if (value.type === 'stream_event') {
       const event = value.event;

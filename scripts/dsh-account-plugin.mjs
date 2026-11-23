@@ -10,7 +10,7 @@ export function apply(ctx, config) {
   const controller = new AbortController();
   ctx.on('dispose', () => controller.abort());
   const emit = value => process.stdout.write(prefix + JSON.stringify(value) + '\n');
-  const client = {version:'0.2.0-rc.2',locale:'zh-CN',timezoneOffsetSeconds:-new Date().getTimezoneOffset()*60};
+  const client = {version:config.clientVersion||'0.2.0-rc.2',locale:'zh-CN',timezoneOffsetSeconds:-new Date().getTimezoneOffset()*60};
   const balance = async () => {
     const unavailable={status:'unavailable',wallets:[],bonusWallets:[]};
     try {

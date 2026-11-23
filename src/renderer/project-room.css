@@ -120,6 +120,8 @@
 .decision-card { align-self: stretch; border-radius: var(--r-lg); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn-soft) 55%, var(--surface)); }
 .decision-card-head { display: flex; align-items: center; gap: 8px; }
 .decision-card-head svg { color: var(--warn); }
+.decision-suggest { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 2px; padding: 8px 12px; border-radius: var(--r-md); border: 1px solid color-mix(in srgb, var(--ok) 35%, var(--line)); background: var(--ok-soft); color: var(--ink); line-height: 1.5; }
+.decision-suggest svg { flex: none; margin-top: 2px; color: var(--ok); }
 .decision-card > p { margin: 6px 0 !important; color: var(--ink-2); }
 .decision-tasks { display: flex; flex-direction: column; gap: 4px; }
 .decision-tasks label { display: flex; align-items: center; gap: 6px; }

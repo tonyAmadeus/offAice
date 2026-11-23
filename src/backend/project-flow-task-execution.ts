@@ -81,6 +81,8 @@ export async function executeFlowTask(host: FlowTaskExecutionHost, initial: Task
         base.id,
         base.fingerprint,
       );
+    // Files the user dropped into the project after this round began (e.g. a data file saved by hand).
+    await host.artifacts.addProjectFiles(flow.projectId, base.root, work.root);
     // Accepted earlier rounds, including their integration repairs, are already in this base.
     // An early copy inherits the permission's source round base; that round's pending submissions still need merging.
     const inputRound = task.earlyDecisionId

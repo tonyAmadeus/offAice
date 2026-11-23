@@ -36,7 +36,7 @@ export function ImageGenerationDialog({snapshot,invoke,text,attachments,onClose,
   return <Modal title="生成图片" subtitle="使用 Codex 额度，一次生成一张。生成后会显示在当前聊天里。" onClose={()=>{if(!sending)onClose();}}>
     <div className="modal-body image-generation-form">
       <label>绘图成员<select aria-label="绘图成员" value={memberId} onChange={event=>setMemberId(event.target.value)} disabled={sending}>{members.map(member=><option key={member.id} value={member.id}>{member.name}</option>)}</select></label>
-      <label>画面描述<textarea aria-label="画面描述" autoFocus rows={5} maxLength={20000} value={description} onChange={event=>setDescription(event.target.value)} placeholder="例如：画一只坐在窗边喝茶的小猫，温暖的水彩风格。也可以附上图片，说明想修改什么。" disabled={sending}/></label>
+      <label>画面描述<textarea aria-label="画面描述" onPaste={attach.paste} autoFocus rows={5} maxLength={20000} value={description} onChange={event=>setDescription(event.target.value)} placeholder="例如：画一只坐在窗边喝茶的小猫，温暖的水彩风格。也可以附上图片，说明想修改什么。" disabled={sending}/></label>
       <div className={`image-generation-references ${attach.dragging?'dragging':''}`} {...attach.dropTarget}><AttachButton onPick={()=>void attach.pick()} busy={attach.busy} disabled={sending} title="添加参考图片"/><span>可添加或拖入参考图片（每张不超过 5 MB）</span><AttachmentTray items={attach.items} onRemove={attach.remove}/></div>
       {invalid&&<p className="room-error" role="alert">请移除非图片附件或超过 5 MB 的图片。</p>}
       {!available&&<p role="alert">请先连接支持绘图的新版 Codex。</p>}

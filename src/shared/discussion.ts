@@ -61,9 +61,14 @@ export const DISCUSSION_LABELS: Record<DiscussionPhase, string> = {
 export function parseDiscussionReply(text: string, turn: string, revision: number): DiscussionReply {
   const value = discussionObject(text);
   const keys = ['version','turn','revision','action','body','replyTo','next','proposalId','questions','answers','emoji'];
+  // Models sometimes miscopy a few characters in the middle of the 36-character turn id (seen with GPT).
+  // A reply to another turn carries that turn's own random id, so a matching revision, matching first 8
+  // characters and at most 4 differing characters mark a copying slip, not a stale reply.
+  const differing = typeof value.turn === 'string' && value.turn.length === turn.length ? [...turn].filter((c, i) => c !== value.turn[i]).length : Infinity;
+  const turnSlip = differing > 0 && differing <= 4 && value.turn.slice(0, 8) === turn.slice(0, 8) && value.revision === revision;
   for (const [key,expected] of Object.entries({version:1,turn,revision})) {
     if (value[key] === undefined) throw new DiscussionFormatError('讨论控制信息缺少必需的轮次字段。', true);
-    if (value[key] !== expected) throw new DiscussionFormatError('讨论控制信息与当前轮次不符，请核对后继续。');
+    if (value[key] !== expected && !(key === 'turn' && turnSlip)) throw new DiscussionFormatError('讨论控制信息与当前轮次不符，请核对后继续。');
   }
   if (!['speak','pass','react','propose','accept','reject','ask_user'].includes(value.action) || typeof value.body !== 'string' || value.body.length > 12000) throw new DiscussionFormatError('讨论动作或正文格式无效。', true);
   const silent = ['pass','react','accept'].includes(value.action);
@@ -71,6 +76,7 @@ export function parseDiscussionReply(text: string, turn: string, revision: numbe
   if (silent && (value.next || value.questions !== undefined && (!Array.isArray(value.questions) || value.questions.length) || value.answers !== undefined && (!Array.isArray(value.answers) || value.answers.length))) throw new DiscussionFormatError('沉默或收尾确认不能同时提出新的调度要求。');
   const reply: DiscussionReply = { version:1,turn,revision,action:value.action,body:value.body,formatWarnings:[] };
   const warn = (text:string) => reply.formatWarnings!.push(text);
+  if (turnSlip) warn('成员抄错了轮次编号中间的几个字符，已按本轮处理。');
   if (reply.action === 'react') {
     const emoji = typeof value.emoji === 'string' ? roomReaction(value.emoji) : undefined;
     if (!emoji) throw new DiscussionFormatError('表情回应只能使用 👍 ❤️ 😄 👀 ❓ 之一。', true);

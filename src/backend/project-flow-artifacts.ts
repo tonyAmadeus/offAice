@@ -48,6 +48,22 @@ export class FlowArtifacts {
       const ready={...item,fingerprint:version,status:'ready' as const};this.store.put('flow_artifacts',id,ready);return ready;
     }catch(error){await this.remove(item);throw error;}
   }
+  /** Files the user added to the project after this round's base was taken (absent from the base and the work copy)
+   * are copied into the work copy, so members and checks see them. Files already in the base are never touched;
+   * writing back later skips them because the project already holds identical content. */
+  async addProjectFiles(projectId:string,baseRoot:string,workRoot:string):Promise<string[]>{
+    const project=this.store.get<{directory:string}>('projects',projectId);if(!project)return [];
+    const norm=(name:string)=>name.replaceAll('\\','/');
+    const known=new Set([...(await workspaceFiles(baseRoot)),...(await workspaceFiles(workRoot))].map(f=>norm(f.relativePath)));
+    const added:string[]=[];
+    for(const file of await workspaceFiles(project.directory)){
+      const name=norm(file.relativePath);
+      if(known.has(name)||name.startsWith('.airoom/')||file.size>128*1024**2)continue;
+      const target=resolveSafePath(workRoot,file.relativePath);await fs.mkdir(path.dirname(target),{recursive:true});
+      await fs.copyFile(resolveSafePath(project.directory,file.relativePath),target);added.push(name);
+    }
+    return added;
+  }
   async remove(item:FlowArtifact){const parent=await fs.realpath(path.join(this.store.dataDirectory,'workspaces'));const target=path.resolve(item.root);if(path.dirname(target)!==parent||!path.basename(target).startsWith('flow-'))throw new FlowError('UNSAFE_ARTIFACT','无法核对临时副本目录。');try{const actual=await fs.realpath(target);if(actual!==target)throw new FlowError('UNSAFE_ARTIFACT','临时副本目录包含链接。');await fs.rm(target,{recursive:true,force:true});}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}this.store.put('flow_artifacts',item.id,{...item,status:'removed',revision:item.revision+1});}
   async merge(target:string,source:FlowArtifact):Promise<{path:string;reason:string}[]>{
     if(!source.baseArtifactId)throw new FlowError('INVALID_BASE','提交缺少基线版本。');
