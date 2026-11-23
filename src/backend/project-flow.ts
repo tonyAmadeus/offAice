@@ -179,6 +179,7 @@ import {
 } from "./project-flow-recovery";
 import { JointReviews } from "./joint-review";
 import { checkCommands, runCheck, autoCheckSummary, type AutoCheck } from "./auto-checks";
+import { recommendDecision } from "../shared/decision-recommendation";
 import {
   JOINT_READS,
   JOINT_WRITES,
@@ -4675,6 +4676,10 @@ export class ProjectFlowController {
     }
   }
   private saveDecision(decision: Decision) {
+    if (!decision.recommendation) {
+      const recommendation = recommendDecision(decision);
+      if (recommendation) decision = { ...decision, recommendation };
+    }
     this.store.putMany([
       { entity: "flow_decisions", id: decision.id, value: decision },
       projectFlowCardWrite(this.store, "decision", decision)!,
@@ -5295,6 +5300,7 @@ export class ProjectFlowController {
         previous,
         [],
         split.judged,
+        automatedChecks.map((c) => c.command),
       );
       integration.findings = assessment.findings.map((f) => ({
         ...f,

@@ -6,6 +6,12 @@ export function failureKind(message: string, code?: unknown): 'failed' | 'rate_l
 /** Display text only: original provider messages/codes remain in the run and native activity records. */
 export const isConnectionFailure=(message:string)=>!/401|403|unauthorized|reauthentication|not.?authenticated|not.?logged.?in|login.?required|credential.*(?:expired|revoked)/i.test(message)&&/workspace routing discovery (?:failed|timed?\s*out)|ECONN|ENOTFOUND|fetch failed|network|proxy|socket|disconnected|broken pipe|EPIPE/i.test(message);
 export function failureMessage(message: string, kind?: FailureKind,delivery?:Run['delivery']): string {
+  // Common provider errors in words a non-programmer can act on.
+  const model=/supported API model names are ([^.(]+?), but you passed ([^\s(]+?)\.?(?=\s|\(|$)/i.exec(message);
+  if(model)return `模型「${model[2]}」不被 DeepSeek 接受。请到 设置 → 连接与版本，把模型改成「${model[1]!.split(',')[0]!.trim()}」，然后再试。`;
+  if(/session cwd does not match/i.test(message))return '成员之前的对话在另一个文件夹，已无法接续；再发一次消息就会自动开新对话。';
+  const missing=/(?:ENOENT[^'"]*['"]([^'"]+)['"]|找不到(?:檔案|文件)[:：]\s*(\S+)|no such file or directory[,:]?\s*(?:open\s*)?['"]?([^'"\s]+))/i.exec(message);
+  if(missing||/\bENOENT\b|no such file/i.test(message))return `成员找不到需要的文件${missing?.slice(1).find(Boolean)?'：'+missing.slice(1).find(Boolean):''}。请确认文件已经放进项目文件夹。`;
   if (/\b1113\b/.test(message) && /balance|resource|余额|套餐不可用|providerCode|["']code["']/i.test(message)) return /[\u4e00-\u9fff]/.test(message) ? message : '服务端未识别到可用的套餐或余额（1113）。请核对账号、登录地区、套餐通道和额度；已有订阅时先确认授权通道。';
   if (/rate.?limit|429|quota.?exceeded|UsageLimitExceeded|usage.?limit/i.test(message) || kind==='rate_limited') return '成员的额度或请求频率受到限制，已暂停。请在“用量与额度”里查看恢复时间，恢复后再继续。';
   if(/\b403\b|permission_error|Request not allowed/i.test(message))return '服务端拒绝了本次请求（403）。请核对账号权限与当前网络；这不一定是登录过期。原始报错保留在活动记录中。';
@@ -15,7 +21,8 @@ export function failureMessage(message: string, kind?: FailureKind,delivery?:Run
   if (/401|unauthorized|reauthentication|not.?authenticated|not.?logged.?in|login.?required|credential.*(?:expired|revoked)/i.test(message)) return '成员的登录已失效，请在成员设置里重新登录，然后检测连接。';
   if (/timed?\s*out|timeout|deadline/i.test(message)) return '等待成员回复的时间过长，已暂停。请先查看活动记录，核对本轮是否完成。';
   if (/ECONN|ENOTFOUND|fetch failed|network|proxy|socket|disconnected|broken pipe|EPIPE/i.test(message)) return '成员连接暂时中断，已暂停。请检查网络并查看活动记录，核对本轮结果。';
-  return '成员程序没能完成本轮，请查看活动记录中的原始报错。';
+  const first=message.split('\n').map(line=>line.replace(/\s+/g,' ').trim()).find(Boolean);
+  return first?`成员这次没能完成。原因：${first.length>120?first.slice(0,120)+'…':first}`:'成员程序没能完成本轮，请查看活动记录中的原始报错。';
 }
 /** A correlated protocol response, distinct from a broken transport or missing receipt. */
 export class NativeResponseError extends Error {

@@ -57,7 +57,9 @@ export function unverifiedCause(evidence?:string){
   return '\n  原因：'+(kind?kind+' — ':'')+(text.length>160?text.slice(0,160)+'…':text);
 }
 /** Preserve the member's verdict. Eligibility to advance is a separate, evidence-based outcome. */
-export function assessReview(payload:ReviewPayload,required:string[],deferred:string[]=[],previous:ReviewFinding[]=[],overruled:string[]=[],judged:string[]=[]){
+export function assessReview(payload:ReviewPayload,required:string[],deferred:string[]=[],previous:ReviewFinding[]=[],overruled:string[]=[],judged:string[]=[],autoRan:string[]=[]){
+  // Commands AIROOM itself ran before the check have a real completion record outside the reviewer's run.
+  const squash=(c?:string)=>(c??'').replace(/\s+/g,' ').trim(),ran=new Set(autoRan.map(squash));
   // Defer only an explicitly unavailable interactive check, never a failed product behavior.
   const practical = required.filter(c => payload.criteriaResults.some(r => r.criterion===c&&!r.verified&&
     /浏览器|实机|真实设备|browser/i.test(c+' '+r.evidence)&&
@@ -72,7 +74,7 @@ export function assessReview(payload:ReviewPayload,required:string[],deferred:st
     if(old&&check?.resolved&&f.kind==='verified'&&f.severity!=='optional')reasons.push('旧问题核对与问题清单相互矛盾：'+f.location);
     return {...f,...(old?{previousFindingId:old.id}:{}),disposition:needsFix?'requires-fix' as const:'advice' as const};}),observedDefects=findings.filter(f=>f.disposition==='requires-fix');
   const missing=required.filter(c=>!payload.criteriaResults.some(r=>r.criterion===c&&r.verified&&Boolean(r.evidence.trim())));
-  const unbound=payload.evidence.filter(e=>commandEvidenceProblem(e)==='missing-completion');
+  const unbound=payload.evidence.filter(e=>commandEvidenceProblem(e)==='missing-completion'&&!ran.has(squash(e.command)));
   const conflicting=payload.evidence.filter(e=>['exit-code-mismatch','failed-execution'].includes(commandEvidenceProblem(e)??''));
   const onlyDeferredIncomplete=deferred.length>0&&!missing.length&&payload.criteriaResults.some(r=>deferred.includes(r.criterion)&&!r.verified)&&payload.criteriaResults.filter(r=>!r.verified).every(r=>deferred.includes(r.criterion));
   if(missing.length)reasons.push('未能核实：\n'+missing.map(c=>'• '+c+unverifiedCause(payload.criteriaResults.find(r=>r.criterion===c)?.evidence)).join('\n'));

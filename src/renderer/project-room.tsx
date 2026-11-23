@@ -16,8 +16,9 @@ import { LOG_READS, type LogTarget } from '../shared/work-log';
 import { RESULT_READS } from '../shared/round-results';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, AppWindow, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, FileDiff, FolderOpen, Hand, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, LoaderCircle, Pause, Play, ScrollText, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { AlertTriangle, AppWindow, ArrowLeft, Check, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, FileDiff, FolderOpen, Hand, Lightbulb, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, LoaderCircle, Pause, Play, ScrollText, Send, Sparkles, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import type { AllowedAction, Decision, FlowOperation, Integration, Plan, ProjectFlowSnapshot, Round, Task, TaskStatus, TaskSupplement, FlowCompletionReport } from '../shared/project-flow';
+import { recommendDecision } from '../shared/decision-recommendation';
 import {FLOW_LIMITS,reviewLevel,roundLead,roundReviewLevel,REVIEW_LEVEL_LABELS,REVIEW_LEVEL_HINTS,QUOTA_STAGE_LABELS,type ReviewLevel,type DisputeRuling} from '../shared/project-flow';
 import type { Project, RoomId, RoomMessage, Snapshot } from '../shared/types';
 import {commandExitCodeNotes} from '../shared/project-flow-review';
@@ -425,11 +426,15 @@ function RoundCard({ round, lead, data, invoke, busy, onDecide, onRecover,onChec
 function DecisionCard({ decision, tasks, rounds,busy, onAnswer }: { decision: Decision; tasks: Task[];rounds:Round[]; busy: boolean; onAnswer: (params: { choice: string; selectedTaskIds?: string[]; allowAllEligible?: boolean;memberId?:string;opinion?:string;rulings?:DisputeRuling[] }) => Promise<boolean> }) {
   const eligible = decision.eligibleTaskIds.map(id => tasks.find(task => task.id === id)).filter((task): task is Task => Boolean(task));
   const [picked, setPicked] = useState<string[]>(() => eligible.map(task => task.id));
-  const team=useTeam(),[memberId,setMemberId]=useState(''),[opinion,setOpinion]=useState(''),[rulings,setRulings]=useState<Record<string,DisputeRuling['verdict']>>({});const requiresMember=(option:string)=>['重新安排','换人复核','换负责人检查','换人接手'].includes(option);
+  // The suggested button, member and wording are filled in up front; the owner can still change any of them.
+  // Cards saved before suggestions existed get one computed here.
+  const suggestion=decision.recommendation??recommendDecision(decision),suggest=suggestion&&decision.options.includes(suggestion.choice)?suggestion:undefined;
+  const team=useTeam(),[memberId,setMemberId]=useState(()=>suggest?.memberId&&(decision.eligibleMemberIds??[]).includes(suggest.memberId)?suggest.memberId:''),[opinion,setOpinion]=useState(suggest?.opinion??''),[rulings,setRulings]=useState<Record<string,DisputeRuling['verdict']>>({});const requiresMember=(option:string)=>['重新安排','换人复核','换负责人检查','换人接手'].includes(option);
   const recommendation=rounds.find(r=>r.id===decision.roundId)?.nextConfirmation?.recommendation,disputes=decision.disputeItems??[];
   const early = decision.kind === 'early-start';
   return <section className="meeting-card decision-card" aria-label={`决策：${decision.title}`}>
     <div className="decision-card-head"><Hand size={15} /><strong>{decision.title}</strong></div>
+    {suggest&&<div className="decision-suggest" role="note"><Lightbulb size={15} /><span>建议：按「<strong>{suggest.choice}</strong>」— {suggest.why}{suggest.memberId?`，已选好 ${team.get(suggest.memberId)?.name??suggest.memberId}`:''}{suggest.opinion?'，补充意见已填好':''}</span></div>}
     <p className="decision-reason">{plainFlowError(decision.reason)}</p>
     {decision.kind==='next-round'&&<div className="next-round-adjustments"><small>沿用现有负责人和分工。较大的方向或范围变化，请选“要求修改方案”。</small>{recommendation?.taskAdjustments.map(a=><div key={a.taskId}><strong>{tasks.find(t=>t.id===a.taskId)?.title}</strong>{a.goal&&<p>目标：{a.goal}</p>}{a.inputs?.length&&<p>补充输入：{joinClauses(a.inputs,'；')}</p>}{a.completionCriteria&&<ul>{a.completionCriteria.map(c=><li key={criterionText(c)}>核对标准：{criterionText(c)}</li>)}</ul>}</div>)}{recommendation?.completionCriteria&&<ul>{recommendation.completionCriteria.map(c=><li key={criterionText(c)}>整轮标准：{criterionText(c)}</li>)}</ul>}</div>}
     {decision.kind==='review-dispute'&&<div className="review-disputes"><small>每项任务最多返还 {FLOW_LIMITS.disputeReturnWaivers} 次退回次数；超过后仍可裁定，退回正常计数。你可统一裁定，也可逐条选择。</small>{disputes.map(({finding,reason})=><div key={finding.id}><strong>{finding.location} · {finding.request}</strong><p>复核依据：{finding.evidence}</p><p>作者异议：{reason}</p><label>逐条裁定<select aria-label={`裁定「${finding.request}」`} value={rulings[finding.id]??''} disabled={busy} onChange={e=>setRulings({...rulings,[finding.id]:e.target.value as DisputeRuling['verdict']})}><option value="">请选择…</option><option value="uphold-author">支持作者</option><option value="uphold-review">维持复核</option></select></label></div>)}</div>}
@@ -440,7 +445,7 @@ function DecisionCard({ decision, tasks, rounds,busy, onAnswer }: { decision: De
       <small>提前开工以已复核的成果为起点；如果这一轮后来又改了它依赖的内容，提前做的部分会标为过期、等待重新安排。</small></div>}
     <div className="round-actions">{decision.options.map(option => {
       const allows = early && option === '允许提前开工';
-      return <button key={option} type="button" className={`button small ${allows||option==='按原计划开始'||option==='按调整开始' ? 'primary' : 'secondary'}`} disabled={busy || allows && !picked.length || requiresMember(option)&&!memberId || option==='提交逐条裁定'&&disputes.some(d=>!rulings[d.finding.id]) || !allowed(decision.allowedActions, 'projectFlow.decision.answer')} onClick={() => void onAnswer(allows ? { choice: option, ...(picked.length === eligible.length ? { allowAllEligible: true } : { selectedTaskIds: picked }) } : { choice: option,opinion,...(requiresMember(option)?{memberId}:{}),...(option==='提交逐条裁定'?{rulings:disputes.map(d=>({findingId:d.finding.id,verdict:rulings[d.finding.id],reason:opinion||'用户逐条裁定'}))}:{}) })}>{option}{allows && picked.length !== eligible.length ? `（${picked.length} 项）` : ''}</button>;
+      return <button key={option} type="button" className={`button small ${(suggest ? option===suggest.choice : allows||option==='按原计划开始'||option==='按调整开始') ? 'primary' : 'secondary'}`} disabled={busy || allows && !picked.length || requiresMember(option)&&!memberId || option==='提交逐条裁定'&&disputes.some(d=>!rulings[d.finding.id]) || !allowed(decision.allowedActions, 'projectFlow.decision.answer')} onClick={() => void onAnswer(allows ? { choice: option, ...(picked.length === eligible.length ? { allowAllEligible: true } : { selectedTaskIds: picked }) } : { choice: option,opinion,...(requiresMember(option)?{memberId}:{}),...(option==='提交逐条裁定'?{rulings:disputes.map(d=>({findingId:d.finding.id,verdict:rulings[d.finding.id],reason:opinion||'用户逐条裁定'}))}:{}) })}>{option}{allows && picked.length !== eligible.length ? `（${picked.length} 项）` : ''}</button>;
     })}</div>
   </section>;
 }

@@ -104,6 +104,7 @@ export interface ProjectFlowSnapshot {requestedChecks?:RequestedRoundCheck[]}
 export interface Acceptance extends FlowRecord { roundId:string; integrationId:string; version:VersionRef; actor:'user'|'lead'; opinion:string; requiresApply:boolean; applyOperationId?:string; appliedPaths:string[]; conflictPaths:string[]; acceptedAt?:string; status:'requested'|'applying'|'accepted'|'conflict'|'changes_requested'|'recovery_required'; allowedActions?:AllowedAction[] }
 export interface Decision extends FlowRecord { kind:'early-start'|'scope-change'|'replan'|'unresolved-review'|'unknown-result'|'meeting-request'|'review-choice'|'review-dispute'|'quota-wait'|'next-round'; roundId?:string; taskId?:string; title:string; reason:string; options:string[]; eligibleTaskIds:string[]; sourceVersions:VersionRef[]; answer?:{choice:string;taskIds:string[];opinion?:string;memberId?:string}; status:'open'|'answered'|'expired'|'cancelled'; allowedActions?:AllowedAction[] }
 export interface Decision { supplementId?:string }
+export interface Decision { recommendation?:{choice:string;why:string;memberId?:string;opinion?:string} }
 export interface Decision {additionId?:string}
 export interface Decision {stage?:'task'|'task-review'|'integration-fix'|'integration-check'|'peer-review';integrationId?:string;eligibleMemberIds?:string[];currentMemberId?:string}
 export interface Decision {submissionId?:string;quotaWaitId?:string}

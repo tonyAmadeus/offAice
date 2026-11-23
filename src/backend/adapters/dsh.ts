@@ -519,7 +519,10 @@ export class DshAdapter implements Adapter {
       const file=await this.command(settings);result.path=file;
       const isolated=buildDshEnvironment(env,home,false,env.DEEPSEEK_API_KEY);
       result.version=await this.collect(file,['--version'],isolated,home);
-      const account=await this.accountStatus(settings,env);
+      // A cold DSH start or slow network can time the online check out; the stored login decides then, so a restart never reads as disconnected.
+      const account=await this.accountStatus(settings,env).catch(async()=>(await storedDshLogin(home))===false
+        ?{authenticated:false,state:'signed-out'} as {authenticated:boolean;state:string;balance?:AccountBalance}
+        :{authenticated:false,state:'signed-in'} as {authenticated:boolean;state:string;balance?:AccountBalance});
       if(account.balance){result.quota={accountBalance:account.balance};result.quotaCheckedAt=account.balance.checkedAt;}
       result.runtimeReady=account.state==='signed-out';
       if(account.state==='signed-out'){result.auth='none';result.detail='DeepSeek 还未登录，请点击登录。';return result;}
@@ -537,7 +540,10 @@ export class DshAdapter implements Adapter {
       await this.request('session/close',{sessionId:this.sessionId},10000);
       this.sessionClosed=true;
       // ACP discovery also takes time: confirm the account still exists before saying it is connected.
-      const current=await this.accountStatus(settings,env,'state');
+      // Read the stored login directly instead of starting DSH a second time; ask DSH only when the file cannot answer.
+      const local=await storedDshLogin(home);
+      const current=local!==undefined?{authenticated:local,state:local?'signed-in':'signed-out'}
+        :await this.accountStatus(settings,env,'state').catch(()=>({authenticated:false,state:'unknown'}));
       if(!current.authenticated){result.auth=current.state==='signed-out'?'none':'unknown';result.runtimeReady=true;result.quota={accountBalance:accountBalanceReport(undefined,new Date().toISOString())};result.detail=current.state==='signed-out'?'DeepSeek 登录已失效，请重新登录。':'DeepSeek 的登录状态暂时无法确认，请重新检测连接。';return result;}
       result.auth='account';
       result.available=true;
