@@ -518,9 +518,10 @@ export class ProjectFlowController {
       this.store.put("flow_quota_waits", wait.id, wait);
       this.host.changed();
     }
+    // Ask at once the first time (a quota reset can be hours away); after "继续等待", ask again every 10 minutes.
     if (
       wait.status === "waiting" &&
-      Date.now() - Date.parse(wait.startedAt) >= 600_000
+      (!wait.asked || Date.now() - Date.parse(wait.startedAt) >= 600_000)
     ) {
       const task = "roundId" in target ? target : undefined,
         round = task
@@ -567,6 +568,7 @@ export class ProjectFlowController {
       this.update("flow_quota_waits", wait, {
         status: "decision",
         decisionId: decision.id,
+        asked: true,
       });
       this.host.changed();
     }
@@ -6877,6 +6879,15 @@ export class ProjectFlowController {
             ? this.need<Task>("flow_tasks", decision.taskId)
             : undefined,
           round = this.need<Round>("flow_rounds", decision.roundId!);
+        // The rate-limited attempt stays "blocked" and would make requireIdle refuse the handover; the user's choice ends it.
+        const stuck = wait.operationId ? this.store.get<FlowOperation>("flow_operations", wait.operationId) : undefined,
+          stuckRun = stuck?.runId ? this.store.get<Run>("runs", stuck.correctionRunId ?? stuck.runId) : undefined;
+        if (stuck?.state === "blocked" && !["queued", "running", "waiting_user", "stopping"].includes(stuckRun?.status ?? ""))
+          this.update("flow_operations", stuck, {
+            state: "done",
+            result: { abandoned: true, reassigned: true },
+            error: "用户选择换人接手：额度未恢复的旧尝试已放弃",
+          });
         this.requireIdle(task?.id ?? round.id);
         if (choice === "交给我裁定" && task)
           this.disputeDecision(
