@@ -178,6 +178,7 @@ import {
   operationNotDelivered,
 } from "./project-flow-recovery";
 import { JointReviews } from "./joint-review";
+import { checkCommands, runCheck, autoCheckSummary, type AutoCheck } from "./auto-checks";
 import {
   JOINT_READS,
   JOINT_WRITES,
@@ -4749,7 +4750,7 @@ export class ProjectFlowController {
           id !== currentMemberId &&
           id !== (task?.memberId ?? (peer ? this.lead(round) : undefined)),
       ),
-      title: task ? "任务复核需要进一步核实" : "整轮检查需要进一步核实",
+      title: task ? "任务复核需要进一步核实" : peer ? "整轮检查需要进一步核实" : "整合检查需要你决定",
       reason,
       options: task
         ? ["重新复核", "换人复核", "退回补充依据"]
@@ -4877,6 +4878,8 @@ export class ProjectFlowController {
         start.fingerprint,
       ),
       included = previous?.includedSubmissionIds ?? [];
+    // Files the user added to the project after this round began must be visible to the integration check too.
+    await this.artifacts.addProjectFiles(flow.projectId, base.root, candidate.root);
     const integration: Integration = {
       ...this.record(flow.projectId, flow.id),
       roundId: round.id,
@@ -5136,6 +5139,19 @@ export class ProjectFlowController {
       await this.releaseReviewCopy(op.id, disposable.id);
     }
   }
+  /** Run one-line check commands from the criteria in a throwaway copy of the integration result; the copy is removed. */
+  private async runAutoChecks(flow: ProjectFlow, candidate: FlowArtifact, criteria: string[]): Promise<AutoCheck[]> {
+    const commands = checkCommands(criteria);
+    if (!commands.length) return [];
+    const copy = await this.artifacts.capture(flow, candidate.root, "review", candidate.baseArtifactId ?? candidate.id, undefined, true);
+    try {
+      const results: AutoCheck[] = [];
+      for (const { criterion, command } of commands) results.push({ criterion, ...(await runCheck(command, copy.root)) });
+      return results;
+    } finally {
+      await this.artifacts.remove(copy).catch(() => {});
+    }
+  }
   private async checkIntegratedRound(
     round: Round,
     integration: Integration,
@@ -5158,6 +5174,7 @@ export class ProjectFlowController {
       integration.version?.fingerprint
     )
       throw new FlowError("STALE_VERSION", "整合检查前成果版本已改变。");
+    const automatedChecks = await this.runAutoChecks(flow, candidate, criteria);
     const session = this.host.session(
       flow.projectId,
       lead,
@@ -5251,7 +5268,9 @@ export class ProjectFlowController {
             diff: diff.text.slice(0, 40000),
             changes,
             meeting,
+            ...(automatedChecks.length ? { automatedChecks } : {}),
             instruction:
+              (automatedChecks.length ? "automatedChecks 是 AIROOM 在整合副本的临时拷贝里实际执行标准中指令的结果（exitCode、output）。可直接作为该标准的证据：exitCode 为 0 时把 output 与报告和文件核对；非 0 或超时则该标准未通过，写入 findings 并引用 output。不必为这些标准再次自己执行。" : "") +
               "在整合副本实际检查，不编辑源文件；不确定则 inconclusive。检查通过时请在同次回复的 report 汇报；remainingIssues 必须列出仍未处理的 advisoryFindings。根据本轮结果在 nextRoundRecommendation 提出下一轮建议，无调整用 as-planned 和按原计划，轻量调整只改未开工任务的目标、输入或标准，大的方向或范围变化用 replan，不能改变负责人、成员或任务范围。diff 是本轮开始时的版本与当前整合结果之间的对比，changes 是程序核对出的改动文件清单。这两项可以直接作为内容和修改范围的依据，不需要再要开工前的基线。taskScopeEvidence 是程序保存的各已提交任务的许可路径、实际改动和越界记录，可用于跨轮核对；不要将本轮 diff 误当作所有轮次的改动。用户验收在这次整合检查和汇报之后进行，不要因为“用户还没确认”判为未通过。阅读本轮未读会议消息，聊天不是修改授权。发现范围内需要修改的内容写入 findings，范围变化或用户问题留给汇报和决策。",
           },
         ),
@@ -5325,7 +5344,8 @@ export class ProjectFlowController {
           flow,
           integration,
           "整合检查无法下结论：" +
-            (assessment.reasons.join("；") || "需要进一步验证。"),
+            (assessment.reasons.join("；") || "需要进一步验证。") +
+            autoCheckSummary(automatedChecks),
         );
         return;
       }

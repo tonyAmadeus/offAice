@@ -135,6 +135,8 @@ export function ProjectRoom({ snapshot, project, invoke, onOpenSession,onRoundta
   const planOp = blocked.find(op => op.kind === 'plan');
   const actionable = (round: Round) => { const acceptance = data?.acceptances.find(item => item.id === round.acceptanceId); return round.status === 'awaiting_acceptance' && round.requiresUserAcceptance || ['recovery_required', 'conflict', 'applying'].includes(acceptance?.status ?? ''); };
   const openDecisions = (data?.decisions ?? []).filter(item => item.status === 'open');
+  // A reason that already has its own decision card is shown there only, not again as a red pause.
+  const paused = Boolean(flow) && (blocked.length > 0 || stuckTasks.length > 0 || (flow!.blockedReasons.length > 0 && openDecisions.length === 0));
   const lastAccepted = rounds.filter(round => round.status === 'accepted').at(-1), lastAcceptance = lastAccepted && data?.acceptances.find(item => item.id === lastAccepted.acceptanceId);
   const acceptedLine = lastAccepted && lastAcceptance?.acceptedAt ? lastAcceptance.actor === 'lead' ? `第 ${lastAccepted.index + 1} 轮「${lastAccepted.title}」负责人自验通过，已进入第 ${lastAccepted.index + 2} 轮；成品会在你下次验收时一起写回项目` : `第 ${lastAccepted.index + 1} 轮「${lastAccepted.title}」已验收 · ${dateTime(lastAcceptance.acceptedAt)} 写回项目` : '';
   const roundOf = (roundId?: string) => { const round = rounds.find(item => item.id === roundId); return round ? `第 ${round.index + 1} 轮：` : ''; };
@@ -154,7 +156,7 @@ export function ProjectRoom({ snapshot, project, invoke, onOpenSession,onRoundta
         ? <div className="dock-row"><AlertTriangle size={15} /><p><strong>方案起草已停止。</strong>{planOp ? '在下面的提示里放弃这次起草，再点右上角“继续”，负责人会重新起草。' : '点右上角“继续”，负责人会接着起草。'}</p></div>
         : <div className="dock-row"><LoaderCircle size={15} className="spin" /><p><MemberName id={flow!.leadMemberId} /> 正在根据讨论起草方案…</p></div>)}
       {live && plan && (plan.status === 'awaiting_confirmation') && <div data-flow-next="plan"><PlanCard plan={plan} invoke={invoke} lead={flow!.leadMemberId} rounds={rounds} busy={busy} defaultLevel={reviewLevel(flow!)} onRoundLevel={(round,level)=>mutate('projectFlow.review.configure',{flowId:flow!.id,expectedRevision:flow!.revision,roundId:round.id,reviewLevel:level},'本轮复核程度已调整。')} onConfirm={(choices,peerChoices,levels) => mutate('projectFlow.plan.confirm', { planId: plan.id, expectedRevision: plan.revision, requiresUserAcceptanceByRound: choices,requiresPeerReviewByRound:peerChoices,reviewLevelByRound:levels }, '方案已确认，开始派发任务。')} onRevise={instruction => mutate('projectFlow.plan.revise', { planId: plan.id, expectedRevision: plan.revision, instruction }, '已请负责人按你的意见改方案。')} /></div>}
-      {live && (blocked.length > 0 || flow!.blockedReasons.length > 0 || stuckTasks.length > 0) && <div data-flow-next="blocked" className="meeting-alert" role="alert"><AlertTriangle size={15} /><div><strong>流程暂停了，需要你先看一下</strong>
+      {live && paused && <div data-flow-next="blocked" className="meeting-alert" role="alert"><AlertTriangle size={15} /><div><strong>流程暂停了，需要你先看一下</strong>
         {blocked.length ? blocked.map(op => { const task = data.tasks.find(item => item.id === op.targetId); return <div key={op.id} className="meeting-alert-item">
           <p><strong>{OPERATION_KIND[op.kind] ?? op.kind}{task ? `：${task.title}` : ''}</strong>　{plainFlowError(op.error)}</p>
           <GiveUp task={op.kind === 'task'} unknown={resultUnknown(op)} supplement={op.kind === 'supplement-delivery'} busy={busy} onContinue={op.kind!=='supplement-delivery'?evidence=>resolveAttempt(op,'continue',evidence):undefined} onConfirm={evidence => giveUp(op, evidence)} /></div>; })
@@ -174,7 +176,7 @@ export function ProjectRoom({ snapshot, project, invoke, onOpenSession,onRoundta
       if (!live) standing.push(flow!.status === 'completed' ? '这段工作已经完成，成品已写回项目' : '这段工作已取消，记录和成果都保留着');
       if (live && flow!.status === 'planning' && !plan) { if (planOp || flow!.dispatchMode !== 'running') waiting.push('方案起草已停止'); else standing.push(`${team.get(flow!.leadMemberId)?.name ?? '负责人'} 正在根据讨论起草方案…`); }
       if (live && plan?.status === 'awaiting_confirmation') waiting.push(`确认方案第 ${plan.version} 版`);
-      if (live && (blocked.length > 0 || flow!.blockedReasons.length > 0 || stuckTasks.length > 0)) waiting.push('流程暂停了，需要你先看一下');
+      if (live && paused) waiting.push('流程暂停了，需要你先看一下');
       if (live) for (const wait of data.quotaWaits ?? []) standing.push(`等待 ${team.get(wait.memberId)?.name ?? '成员'} 额度恢复`);
       if (live) for (const decision of openDecisions) waiting.push(roundOf(decision.roundId) + decision.title);
       if (live) for (const round of rounds.filter(actionable)) waiting.push(`第 ${round.index + 1} 轮成品待验收`);
